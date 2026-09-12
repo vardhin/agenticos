@@ -1,5 +1,6 @@
 import { get, writable } from 'svelte/store';
 import { controlGraph, nodeById } from './graph';
+import { osApi } from './api';
 import type {
 	ActionEvent,
 	CommandSource,
@@ -277,6 +278,41 @@ export function createOSRuntime() {
 	const state = writable<OSState>(structuredClone(initialState));
 	const events = writable<ActionEvent[]>(seedEvents);
 	let eventId = seedEvents.length;
+	let persistState = false;
+	let persistTimer: ReturnType<typeof setTimeout> | undefined;
+
+	async function initialize() {
+		try {
+			const [savedState, savedEvents] = await Promise.all([osApi.loadState(), osApi.loadEvents()]);
+			if (Object.keys(savedState).length > 0) {
+				state.set({
+					...structuredClone(initialState),
+					...savedState,
+					windows: { ...structuredClone(initialState.windows), ...savedState.windows },
+					toast: null,
+					overlay: null,
+					menuOpen: false,
+					wifiOpen: false
+				});
+			}
+			if (savedEvents.length > 0) {
+				events.set(savedEvents);
+				eventId = Math.max(...savedEvents.map((event) => event.id));
+			}
+			persistState = true;
+			if (Object.keys(savedState).length === 0) await osApi.saveState(get(state));
+			return true;
+		} catch {
+			// The desktop remains fully usable in-memory when its optional API is offline.
+			return false;
+		}
+	}
+
+	state.subscribe((value) => {
+		if (!persistState) return;
+		if (persistTimer) clearTimeout(persistTimer);
+		persistTimer = setTimeout(() => void osApi.saveState(value).catch(() => undefined), 250);
+	});
 
 	function updateWindow(
 		name: keyof OSState['windows'],
@@ -565,6 +601,7 @@ export function createOSRuntime() {
 			durationMs: Math.max(1, Math.round(performance.now() - started))
 		};
 		events.update((items) => [event, ...items].slice(0, 120));
+		if (persistState) void osApi.logEvent(event, normalized.input).catch(() => undefined);
 		console.groupCollapsed(
 			`%cAgentOS ${event.source} → ${event.node}`,
 			`color:${result === 'ok' ? '#78c68a' : '#ef7474'};font-weight:600`
@@ -580,7 +617,15 @@ export function createOSRuntime() {
 		updateWindow(name, { x, y });
 	}
 
-	return { state, events, dispatch, moveWindow, graph: controlGraph, snapshot: () => get(state) };
+	return {
+		state,
+		events,
+		dispatch,
+		moveWindow,
+		initialize,
+		graph: controlGraph,
+		snapshot: () => get(state)
+	};
 }
 
 export type OSRuntime = ReturnType<typeof createOSRuntime>;

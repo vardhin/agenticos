@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { formatFileMeta, osApi, type FileEntry } from '$lib/os/api';
 	import { createOSRuntime } from '$lib/os/runtime';
 	import type { OSCommand, WindowName } from '$lib/os/types';
 
@@ -11,7 +12,12 @@
 	let settingsSection = $state('Appearance');
 	let softwareSearch = $state('');
 	let fileSearch = $state('');
-	let selectedFile = $state('');
+	let selectedFileId = $state<number | null>(null);
+	let activeFileId = $state<number | null>(null);
+	let activeFileName = $state('desktop-actions-notes.txt');
+	let backendOnline = $state(false);
+	let filesLoading = $state(false);
+	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const desktopIcons = [
 		{ id: 'desktop.home', label: 'Home', icon: '/assets/icons/home.svg' },
@@ -59,19 +65,90 @@
 		}
 	];
 
-	const files = [
-		{ name: 'Desktop', kind: 'folder', meta: '6 items' },
-		{ name: 'Documents', kind: 'folder', meta: '12 items' },
-		{ name: 'Downloads', kind: 'folder', meta: '8 items' },
-		{ name: 'Pictures', kind: 'folder', meta: '34 items' },
-		{ name: 'Research', kind: 'folder', meta: '4 items' },
-		{ name: 'desktop-actions-notes.txt', kind: 'text', meta: '2.1 KB · Today' },
-		{ name: 'agent-architecture.pdf', kind: 'pdf', meta: '1.8 MB · Yesterday' },
-		{ name: 'research-assets.zip', kind: 'archive', meta: '14.2 MB · Sep 10' }
-	];
+	let files = $state<FileEntry[]>([
+		{
+			id: -1,
+			parent_id: null,
+			name: 'Desktop',
+			kind: 'folder',
+			mime_type: null,
+			size: 0,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Desktop'
+		},
+		{
+			id: -2,
+			parent_id: null,
+			name: 'Documents',
+			kind: 'folder',
+			mime_type: null,
+			size: 0,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Documents'
+		},
+		{
+			id: -3,
+			parent_id: null,
+			name: 'Downloads',
+			kind: 'folder',
+			mime_type: null,
+			size: 0,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Downloads'
+		},
+		{
+			id: -4,
+			parent_id: null,
+			name: 'Pictures',
+			kind: 'folder',
+			mime_type: null,
+			size: 0,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Pictures'
+		},
+		{
+			id: -5,
+			parent_id: null,
+			name: 'Research',
+			kind: 'folder',
+			mime_type: null,
+			size: 0,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Documents/Research'
+		},
+		{
+			id: -6,
+			parent_id: null,
+			name: 'desktop-actions-notes.txt',
+			kind: 'text',
+			mime_type: 'text/plain',
+			size: 2100,
+			starred: false,
+			deleted: false,
+			created_at: '',
+			updated_at: '',
+			path: '/home/agentos/Documents/Research/desktop-actions-notes.txt'
+		}
+	]);
 	const visibleFiles = $derived(
 		files.filter((file) => file.name.toLowerCase().includes(fileSearch.toLowerCase()))
 	);
+	const selectedFile = $derived(files.find((file) => file.id === selectedFileId) ?? null);
 	const software = [
 		{ name: 'Firefox', category: 'Web', rating: '4.8', description: 'Fast, private web browser' },
 		{
@@ -123,6 +200,26 @@
 	onMount(() => {
 		const timer = window.setInterval(() => (clock = new Date()), 1000);
 		const stream = new EventSource('/api/control');
+		let backendStream: EventSource | undefined;
+		let loadedPath = '';
+		const unsubscribeState = osState.subscribe((current) => {
+			if (backendOnline && current.filesPath !== loadedPath) {
+				loadedPath = current.filesPath;
+				void loadFiles(current.filesPath);
+			}
+		});
+		void runtime.initialize().then((connected) => {
+			backendOnline = connected;
+			if (!connected) return;
+			loadedPath = runtime.snapshot().filesPath;
+			void loadFiles(loadedPath);
+			backendStream = osApi.commandStream();
+			backendStream.addEventListener(
+				'command',
+				(event) =>
+					void runtime.dispatch(JSON.parse((event as MessageEvent).data) as OSCommand, 'remote')
+			);
+		});
 		stream.addEventListener(
 			'command',
 			(event) =>
@@ -167,6 +264,8 @@
 		return () => {
 			window.clearInterval(timer);
 			stream.close();
+			backendStream?.close();
+			unsubscribeState();
 			window.removeEventListener('agentos:command', receiveCommand);
 			window.removeEventListener('message', receiveMessage);
 			window.removeEventListener('keydown', keyboard);
@@ -222,6 +321,115 @@
 		}
 		await runtime.dispatch(command, 'human');
 	}
+
+	async function loadFiles(path = $osState.filesPath, query = '') {
+		if (!backendOnline) return;
+		filesLoading = true;
+		try {
+			files = query.trim() ? await osApi.searchFiles(query.trim()) : await osApi.listFiles(path);
+			selectedFileId = null;
+		} catch (error) {
+			await runtime.dispatch(
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to load files'
+				},
+				'system'
+			);
+		} finally {
+			filesLoading = false;
+		}
+	}
+
+	async function openPath(path: string) {
+		await runtime.dispatch({ node: 'files.path', input: path });
+		await loadFiles(path);
+	}
+
+	async function openFile(file: FileEntry) {
+		if (file.kind === 'folder') return openPath(file.path);
+		if (file.kind !== 'text') {
+			await runtime.dispatch({ node: 'files.action', input: `Opened ${file.name}` });
+			return;
+		}
+		try {
+			const loaded = await osApi.getFile(file.id, true);
+			activeFileId = loaded.id;
+			activeFileName = loaded.name;
+			await runtime.dispatch({ node: 'window.editor.text', input: loaded.content ?? '' });
+			await runtime.dispatch('menu.editor.open');
+		} catch (error) {
+			await runtime.dispatch(
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to open file'
+				},
+				'system'
+			);
+		}
+	}
+
+	async function saveDocument() {
+		if (!backendOnline || activeFileId === null) {
+			await runtime.dispatch({ node: 'files.action', input: 'Document kept in desktop state' });
+			return;
+		}
+		await osApi.saveFile(activeFileId, $osState.editorText);
+		await runtime.dispatch({ node: 'files.action', input: `Saved ${activeFileName}` });
+	}
+
+	async function createFolder() {
+		if (!backendOnline)
+			return void runtime.dispatch({ node: 'files.action', input: 'Backend is offline' });
+		const name = window.prompt('Folder name', 'New Folder')?.trim();
+		if (!name) return;
+		try {
+			await osApi.createFile({ parent_path: $osState.filesPath, name, kind: 'folder' });
+			await loadFiles();
+			await runtime.dispatch({ node: 'files.action', input: `Created ${name}` });
+		} catch (error) {
+			await runtime.dispatch(
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to create folder'
+				},
+				'system'
+			);
+		}
+	}
+
+	async function renameSelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const oldName = selectedFile.name;
+		const name = window.prompt('New name', oldName)?.trim();
+		if (!name || name === oldName) return;
+		await osApi.updateFile(selectedFile.id, { name });
+		await loadFiles();
+		await runtime.dispatch({ node: 'files.action', input: `Renamed ${oldName} to ${name}` });
+	}
+
+	async function trashSelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const { id, name } = selectedFile;
+		await osApi.trashFile(id);
+		await loadFiles();
+		await runtime.dispatch({ node: 'files.action', input: `Moved ${name} to Trash` });
+	}
+
+	async function restoreSelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const { id, name } = selectedFile;
+		await osApi.restoreFile(id);
+		await loadFiles();
+		await runtime.dispatch({ node: 'files.action', input: `Restored ${name}` });
+	}
+
+	function searchFiles(value: string) {
+		fileSearch = value;
+		if (!backendOnline) return;
+		if (fileSearchTimer) clearTimeout(fileSearchTimer);
+		fileSearchTimer = setTimeout(() => void loadFiles($osState.filesPath, value), 180);
+	}
 </script>
 
 <svelte:head
@@ -265,7 +473,7 @@
 				onpointerdown={(event) => beginDrag(event, 'editor')}
 			>
 				<div class="window-title">
-					desktop-actions-notes.txt <span>— ~/Documents/Research</span>
+					{activeFileName} <span>— ~/Documents/Research</span>
 				</div>
 				<div class="window-controls">
 					<button
@@ -301,7 +509,8 @@
 			</nav>
 			<div class="toolbar" aria-label="Editor toolbar">
 				<button title="New document"><img src="/assets/icons/document-new.svg" alt="" /></button
-				><button title="Save document"><img src="/assets/icons/document-save.svg" alt="" /></button
+				><button title="Save document" onclick={saveDocument}
+					><img src="/assets/icons/document-save.svg" alt="" /></button
 				><span class="tool-separator"></span><button title="Undo"
 					><img src="/assets/icons/edit-undo.svg" alt="" /></button
 				><button title="Redo"><img src="/assets/icons/edit-redo.svg" alt="" /></button><span
@@ -492,24 +701,20 @@
 					><img src="/assets/icons/search.svg" alt="" /><input
 						aria-label="Search files"
 						placeholder="Search"
-						bind:value={fileSearch}
+						value={fileSearch}
+						oninput={(event) => searchFiles(event.currentTarget.value)}
 					/></label
 				>
-				<button
-					class="new-button"
-					onclick={() => runtime.dispatch({ node: 'files.action', input: 'New folder created' })}
-					>+ New</button
-				>
+				<button class="new-button" onclick={createFolder}>+ New</button>
 			</div>
 			<div class="files-body">
 				<aside>
 					<strong>Places</strong>
 					{#each ['Home', 'Desktop', 'Documents', 'Downloads', 'Recent', 'Starred', 'Trash'] as place (place)}<button
 							class:active={$osState.filesPath === place}
-							onclick={() => runtime.dispatch({ node: 'files.path', input: place })}>{place}</button
+							onclick={() => openPath(place)}>{place}</button
 						>{/each}
-					<strong>Devices</strong><button
-						onclick={() => runtime.dispatch({ node: 'files.path', input: 'Archive USB' })}
+					<strong>Devices</strong><button onclick={() => openPath('Archive USB')}
 						>Archive USB <small>32 GB</small></button
 					>
 				</aside>
@@ -517,19 +722,18 @@
 					<div class="files-heading">
 						<div>
 							<strong>{$osState.filesPath}</strong><small
-								>{visibleFiles.length} items · sorted by name</small
+								>{filesLoading
+									? 'Loading…'
+									: `${visibleFiles.length} items · sorted by name`}</small
 							>
 						</div>
 						<button aria-label="Grid view">▦</button><button aria-label="Sort files">↕</button>
 					</div>
 					<div class="folder-grid">
-						{#each visibleFiles as file (file.name)}<button
-								class:selected={selectedFile === file.name}
-								onclick={() => (selectedFile = file.name)}
-								ondblclick={() =>
-									file.kind === 'folder'
-										? runtime.dispatch({ node: 'files.path', input: file.name })
-										: runtime.dispatch({ node: 'files.action', input: `Opened ${file.name}` })}
+						{#each visibleFiles as file (file.id)}<button
+								class:selected={selectedFileId === file.id}
+								onclick={() => (selectedFileId = file.id)}
+								ondblclick={() => openFile(file)}
 							>
 								<img
 									src={file.kind === 'folder'
@@ -538,24 +742,17 @@
 											? '/assets/icons/editor.svg'
 											: '/assets/icons/drive.svg'}
 									alt=""
-								/><span>{file.name}</span><small>{file.meta}</small>
+								/><span>{file.name}</span><small>{formatFileMeta(file)}</small>
 							</button>{/each}
 					</div>
 					{#if selectedFile}<div class="file-actions">
-							<span>{selectedFile}</span><button
+							<span>{selectedFile.name}</span><button
 								onclick={() =>
-									runtime.dispatch({ node: 'files.action', input: `Shared ${selectedFile}` })}
+									runtime.dispatch({ node: 'clipboard.copy', input: selectedFile.path })}
 								>Share</button
-							><button
-								onclick={() =>
-									runtime.dispatch({ node: 'files.action', input: `Renamed ${selectedFile}` })}
-								>Rename</button
-							><button
-								onclick={() =>
-									runtime.dispatch({
-										node: 'files.action',
-										input: `Moved ${selectedFile} to Trash`
-									})}>Trash</button
+							><button onclick={renameSelected}>Rename</button
+							>{#if $osState.filesPath === 'Trash'}<button onclick={restoreSelected}>Restore</button
+								>{:else}<button onclick={trashSelected}>Trash</button>{/if}
 							>
 						</div>{/if}
 				</div>
@@ -868,19 +1065,21 @@
 					</div>
 					<p class="section-label">RECENT FILES</p>
 					{#each files
-						.slice(5)
+						.filter((file) => file.kind !== 'folder')
 						.filter((file) => file.name
 								.toLowerCase()
 								.includes($osState.menuSearch.toLowerCase())) as file (file.name)}<button
 							class="search-result"
 							onclick={() => {
 								runtime.dispatch('menu.files.open');
-								selectedFile = file.name;
+								selectedFileId = file.id;
 							}}
 							><img
 								src={file.kind === 'text' ? '/assets/icons/editor.svg' : '/assets/icons/drive.svg'}
 								alt=""
-							/><span><strong>{file.name}</strong><small>Home / Research · {file.meta}</small></span
+							/><span
+								><strong>{file.name}</strong><small>{file.path} · {formatFileMeta(file)}</small
+								></span
 							><kbd>↵</kbd></button
 						>{/each}
 					<p class="section-label">QUICK ACTIONS</p>

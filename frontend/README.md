@@ -5,8 +5,15 @@ A functional SvelteKit desktop simulation backed by a semantic control graph. Hu
 ## Run
 
 ```sh
+cd ../backend && uv sync && uv run backend
+# in another terminal
+cd ../frontend
 bun run dev
 ```
+
+The frontend proxies `/backend-api` to the FastAPI server during development. Set
+`VITE_AGENTOS_API_URL` when the API is hosted elsewhere. If the backend is unavailable,
+the desktop still starts with its in-memory demo state, but persistence and file CRUD are disabled.
 
 ## Invoke nodes
 
