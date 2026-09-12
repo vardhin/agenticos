@@ -1,0 +1,1303 @@
+AGENT-NATIVE OS CONTROL ARCHITECTURE
+Consolidated discussion notes
+Date: 2026-09-13
+
+============================================================
+1. ORIGINAL IDEA: RL NAVIGATION OVER A GRAPH
+============================================================
+
+Starting assumption:
+
+A computer or environment can be represented as a graph. The agent is given a source, intermediate goal(s), and a final goal, and must determine how to traverse the graph.
+
+Example graph:
+
+a
+├── x
+│   ├── a
+│   └── y
+│       ├── i
+│       ├── l
+│       └── j
+│           └── k
+└── z
+
+If the instruction is:
+
+    go from x to y, then finally reach k
+
+then the correct trajectory is:
+
+    x -> y -> j -> k
+
+A simple RL formulation is:
+
+STATE:
+    current node
+    + current objective
+
+ACTION:
+    choose one outgoing edge
+
+REWARD:
+    positive reward for reaching required intermediate goal
+    larger reward for reaching final goal
+    small negative reward per step
+    negative reward for invalid or undesirable movement
+
+A basic tabular Q-learning agent could learn this if the graph is small and discrete.
+
+However, the instruction is ordered, so the state should encode progress through the instruction.
+
+Example:
+
+    state = (current_node, waypoint_index)
+
+For an ordered task [x, y, k], the agent can distinguish:
+
+    (x, 0)
+    (y, 1)
+    (j, 1)
+    (k, 2)
+
+This is effectively a task-state augmentation of the underlying environment.
+
+A more general formulation is goal-conditioned RL:
+
+    policy(action | state, goal)
+
+or:
+
+    Q(state, action, goal)
+
+This allows one learned policy to navigate toward arbitrary requested goals.
+
+Relevant algorithmic families include:
+
+- Q-learning
+- Goal-conditioned Q-learning
+- Universal Value Function Approximators (UVFA)
+- Hierarchical Reinforcement Learning
+- Options framework
+- Feudal RL
+- Goal-conditioned hierarchical RL
+
+Important caveat:
+
+If the graph is fully known, deterministic, and small, graph search algorithms such as BFS, Dijkstra, or A* may be much more appropriate than RL.
+
+RL becomes useful when:
+
+- edge/action success is uncertain
+- action costs are unknown initially
+- actions sometimes fail
+- the environment changes
+- user preferences matter
+- long-term consequences matter
+- the environment is partially observable
+- routes must be learned from experience
+
+
+============================================================
+2. HOW DOES THE AGENT UNDERSTAND "FIRST X, THEN K"?
+============================================================
+
+The RL algorithm itself does not need to understand natural language.
+
+A fast parser or task compiler can convert:
+
+    "first go to x, then reach k"
+
+into:
+
+    [x, k]
+
+The system then maintains task state:
+
+    current_goal = x
+    remaining_goals = [k]
+
+The RL policy only sees:
+
+    (current_state, current_goal)
+
+Once x is reached:
+
+    current_goal = k
+
+The architecture is:
+
+    Natural-language instruction
+              ↓
+       tiny parser/compiler
+              ↓
+       structured task
+              ↓
+       goal controller
+              ↓
+      goal-conditioned policy
+
+A more rigorous representation is to compile the instruction into a finite-state machine / task automaton.
+
+Example:
+
+    START -> REACH_X -> REACH_K -> DONE
+
+The complete state becomes:
+
+    (environment_state, task_state)
+
+This prevents mistakes such as reaching k before x and incorrectly declaring success.
+
+The instruction itself can therefore be treated as another graph.
+
+Environment graph:
+
+    a -> x -> y -> j -> k
+
+Task graph:
+
+    START -> X -> K -> DONE
+
+Effective state:
+
+    (environment node, task node)
+
+This makes ordered instructions precise.
+
+
+============================================================
+3. AVOIDING LLMS FOR SIMPLE COMMANDS
+============================================================
+
+LLMs are too expensive and slow for routine computer control.
+
+For constrained command vocabularies, use a tiny parser instead.
+
+Examples:
+
+    go to x
+    go to x then k
+    first x then y then k
+    avoid l and reach k
+
+These can be compiled into structured representations such as:
+
+    SEQUENCE(REACH(x), REACH(k))
+
+or:
+
+    SEQUENCE(REACH(x), AVOID(l), REACH(k))
+
+A tiny domain-specific language can be used.
+
+Possible grammar:
+
+    COMMAND := ACTION | ACTION THEN COMMAND
+    ACTION  := GO NODE | AVOID NODE
+
+For very constrained environments, even a regex, trie, lexer, grammar parser, or dictionary lookup is sufficient.
+
+If the user simply says:
+
+    k
+
+and k is a known node, then:
+
+    goal = k
+
+No language model or NLP is required.
+
+The entire interpretation path may reduce to:
+
+    "k" -> node lookup -> goal ID
+
+The RL policy can then operate on integer IDs.
+
+Example:
+
+    a = 0
+    x = 1
+    y = 2
+    i = 3
+    l = 4
+    j = 5
+    k = 6
+    z = 7
+
+Then:
+
+    "k" -> 6 -> policy(state, goal=6)
+
+This is extremely cheap.
+
+
+============================================================
+4. CORE SYSTEM IDEA: MAP COMPUTER CONTROLS TO A GRAPH
+============================================================
+
+The central concept is to make computer controls explicitly machine-operable.
+
+Instead of an LLM visually interpreting a GUI and clicking through it, the OS exposes computer capabilities as structured state/action primitives.
+
+Conceptually:
+
+    Human intent
+        ↓
+    fast intent resolver
+        ↓
+    symbolic goal in computer-control graph
+        ↓
+    graph planner / RL policy
+        ↓
+    endpoint-bound action(s)
+        ↓
+    real computer state change
+
+Example:
+
+    User: "wifi on"
+
+The resolver maps this to:
+
+    entity = WIFI
+    operation = ENABLE
+    goal = WIFI_ENABLED
+
+The system then operates over explicit environment state rather than screenshots.
+
+This means the computer itself exposes its semantic ground truth.
+
+Instead of:
+
+    screenshot
+    -> detect tray
+    -> find icon
+    -> click
+    -> inspect new screenshot
+    -> find Wi-Fi
+    -> click
+    -> verify
+
+we can do:
+
+    "wifi on"
+    -> WIFI_ENABLED
+    -> plan
+    -> wifi.enable()
+    -> verify state
+
+This removes redundant visual reasoning.
+
+
+============================================================
+5. WHY THIS IS DIFFERENT FROM SCREENSHOT-BASED AGENTS
+============================================================
+
+The dominant general-computer-agent paradigm is approximately:
+
+    computer designed for humans
+        ↓
+    pixels / accessibility tree / DOM
+        ↓
+    large multimodal model
+        ↓
+    reasoning
+        ↓
+    mouse / keyboard
+        ↓
+    computer
+
+The proposed paradigm is:
+
+    computer designed for agents
+        ↓
+    explicit machine state
+        ↓
+    affordance/action graph
+        ↓
+    cheap planner or learned policy
+        ↓
+    function/endpoint
+        ↓
+    computer
+
+The key architectural inversion is:
+
+    CURRENT PARADIGM:
+    little environment structure + expensive agent intelligence
+
+    PROPOSED PARADIGM:
+    rich environment structure + cheap agent intelligence
+
+The OS already knows what a Wi-Fi toggle means. A multimodal model should not have to infer that meaning from pixels every time.
+
+The broader research thesis is:
+
+    Computer operation should use the minimum intelligence necessary for the uncertainty remaining after the environment exposes what it already knows.
+
+
+============================================================
+6. IMPORTANT REFINEMENT: RL SHOULD NOT BE USED EVERYWHERE
+============================================================
+
+If a state transition graph is known and deterministic, RL is unnecessary.
+
+For many routine actions, deterministic planning may be superior.
+
+A better hierarchy is:
+
+    1. Direct lookup / deterministic rule
+    2. Symbolic graph planning
+    3. Contextual bandit
+    4. Reinforcement learning
+    5. LLM semantic reasoning
+
+Each is used only when appropriate.
+
+Example:
+
+    "wifi on"
+
+may collapse to:
+
+    exact intent
+    -> WIFI_ENABLED goal
+    -> direct endpoint
+
+No RL and no LLM.
+
+Whereas:
+
+    "connect me to the best network"
+
+may require a contextual bandit to choose among available networks.
+
+And:
+
+    "fix my internet, but don't break my SSH session"
+
+may require an LLM to interpret semantic constraints before the structured environment takes over again.
+
+
+============================================================
+7. CENTRAL PLANNER / ROUTER ARCHITECTURE
+============================================================
+
+A central planner should decide which mechanism should handle each request.
+
+Initial concept:
+
+    Planner
+      -> LLM -> Planner
+      -> RL -> Planner
+      -> Contextual Bandit -> Planner
+      -> Lookup Table -> Planner
+      -> Doer
+
+Refined architecture:
+
+                         USER PROMPT
+                              ↓
+                         ┌─────────┐
+                         │ PLANNER │
+                         └────┬────┘
+             ┌────────────────┼─────────────────┐
+             ↓                ↓                 ↓
+           LUT          Contextual Bandit      RL
+             │                │                 │
+             └────────────────→ PLANNER ←───────┘
+                                  ↑
+                                  │
+                                 LLM
+                                  │
+                                  └────────────
+                                  ↓
+                              ┌─────────┐
+                              │  DOER   │
+                              └─────────┘
+                                  ↓
+                               COMPUTER
+                                  ↓
+                             observed state
+                                  ↓
+                               PLANNER
+
+Hard rule:
+
+    Specialists do not directly control the computer.
+
+They return a structured recommendation, plan, goal, strategy, or action to the planner.
+
+Only the Doer executes.
+
+This keeps the planner as the control plane and the specialists as computational resources.
+
+
+============================================================
+8. ROLES OF EACH COMPONENT
+============================================================
+
+LOOKUP TABLE (LUT)
+------------------
+Use when a command maps directly to a known action or goal.
+
+Examples:
+
+    "wifi on"
+    "mute"
+    "brightness 40"
+    "bluetooth off"
+
+Extremely fast and deterministic.
+
+
+SYMBOLIC GRAPH PLANNER
+----------------------
+Use when the environment transitions are known and deterministic.
+
+Example:
+
+    Goal: CONNECTED("VIT-WiFi")
+    Current state: Wi-Fi off
+
+Possible plan:
+
+    ENABLE_WIFI
+    SCAN
+    CONNECT("VIT-WiFi")
+
+A* / Dijkstra / BFS can be used depending on the cost structure.
+
+
+CONTEXTUAL BANDIT
+-----------------
+Use for one-step strategy selection under context.
+
+Question answered:
+
+    Given this situation, which strategy or option should I choose?
+
+Example:
+
+    visible networks:
+      A: signal 70%, historically reliable
+      B: signal 95%, often auth-fails
+      C: unknown
+
+The contextual bandit may choose A.
+
+Potential context features:
+
+- signal strength
+- known/unknown network
+- historical success
+- latency
+- current workload
+- user preference
+- internet availability
+
+
+REINFORCEMENT LEARNING
+----------------------
+Use for sequential decision-making under uncertainty.
+
+Question answered:
+
+    Given the current state and goal, what sequence of actions should I take as the environment changes?
+
+Useful when:
+
+- actions can fail
+- transition outcomes are uncertain
+- environment differs across machines
+- sequential recovery is required
+- long-term reward matters
+
+
+LLM
+---
+Use only for semantic ambiguity, novelty, or difficult natural-language reasoning.
+
+Example:
+
+    "the internet feels terrible, fix it without breaking my SSH session"
+
+The LLM should return a structured representation such as:
+
+    goal = STABLE_INTERNET
+    constraints = [PRESERVE_SSH]
+    diagnostics = [CHECK_PACKET_LOSS, CHECK_SIGNAL, CHECK_INTERFACE_ERRORS]
+
+The LLM does NOT directly operate the system.
+
+It returns to the planner.
+
+
+DOER
+----
+The Doer should be intentionally simple.
+
+Input example:
+
+    action_id = WIFI_ENABLE
+    args = {}
+
+The Doer maps that action to an endpoint / OS function and executes it.
+
+Then it returns execution result and observed state to the planner.
+
+
+============================================================
+9. INTELLIGENCE CASCADE
+============================================================
+
+The system should always try to use the cheapest competent mechanism.
+
+Conceptual cost/latency hierarchy:
+
+    deterministic rule / lookup
+             ↑
+        graph planner
+             ↑
+      contextual bandit
+             ↑
+             RL
+             ↑
+            LLM
+
+As cost, latency, and generality increase, the planner escalates only when required.
+
+The planner itself should initially be deterministic rather than LLM-based.
+
+Example routing logic:
+
+    if exact_command_match:
+        use LUT
+
+    elif known deterministic multi-step goal:
+        use graph planner
+
+    elif one-step contextual selection:
+        use contextual bandit
+
+    elif uncertain sequential control:
+        use RL
+
+    elif semantic confidence is too low:
+        escalate to LLM
+
+Later, routing itself may be learned.
+
+A contextual bandit could eventually choose the specialist using context such as:
+
+- prompt features
+- machine state
+- historical success
+- latency
+- compute cost
+
+Potential reward:
+
+    reward = task_success
+             - alpha * latency
+             - beta  * compute_cost
+             - gamma * unnecessary_actions
+
+This leads to a larger idea:
+
+    Intelligence should be treated as a dynamically allocated computational resource.
+
+
+============================================================
+10. CLOSED-LOOP EXECUTION
+============================================================
+
+The system should continuously observe state after execution.
+
+Loop:
+
+    User
+      ↓
+    Planner
+      ↓
+    Specialist
+      ↓
+    Planner
+      ↓
+    Doer
+      ↓
+    Computer
+      ↓
+    State observer
+      ↓
+    Planner
+
+The planner asks after every execution:
+
+    Did we achieve the requested goal?
+
+If yes:
+
+    DONE
+
+If no:
+
+    re-plan or escalate
+
+This keeps the system grounded in actual machine state instead of assumptions.
+
+
+============================================================
+11. STOCK OS FUNCTIONAL DOMAINS
+============================================================
+
+Ignoring low-level OS plumbing, a modern desktop user fundamentally expects these user-facing systems:
+
+1. Launch
+   - app launching
+   - app search
+   - recent apps
+   - favorite/pinned apps
+
+2. Windows
+   - open/close/minimize/maximize
+   - move/resize
+   - switching
+   - tiling/snapping
+   - fullscreen
+
+3. Workspaces
+   - virtual desktops
+   - move windows between workspaces
+   - workspace overview
+
+4. Files
+   - browse
+   - create
+   - copy/move/rename/delete
+   - trash/restore
+   - search
+   - sort/filter
+   - recents
+   - external drives
+   - archives
+
+5. Search
+   - apps
+   - files
+   - settings
+   - recent content
+   - system actions
+
+6. Clipboard
+   - copy/cut/paste
+   - text/images/files
+   - clipboard history
+
+7. Notifications
+   - popups
+   - notification history
+   - clear
+   - per-app controls
+   - DND
+
+8. Quick Controls
+   - Wi-Fi
+   - Bluetooth
+   - volume
+   - brightness
+   - dark/light mode
+   - DND
+   - VPN/hotspot
+   - audio device selection
+
+9. Settings
+   - displays
+   - audio
+   - network
+   - Bluetooth
+   - keyboard
+   - mouse/touchpad
+   - appearance
+   - applications/default apps
+   - notifications
+   - users
+   - date/language
+   - accessibility
+
+10. Software
+    - search/install/uninstall/update applications
+
+11. Open/Share
+    - Open With
+    - share to apps/devices
+
+12. Overview
+    - running apps
+    - open windows
+    - workspaces
+    - system activity
+
+These can be collapsed into approximately six user-facing interfaces:
+
+    Search/Launcher
+    Overview
+    Files
+    Control Centre
+    Settings
+    Software
+
+
+============================================================
+12. FIRST PROTOTYPE DOMAIN: QUICK CONTROLS -> WI-FI
+============================================================
+
+Wi-Fi is a good starting point because it is small enough to fully model but rich enough to exercise the complete architecture.
+
+Hierarchy:
+
+    COMPUTER
+    └── Quick Controls
+        └── Network
+            └── Wi-Fi
+                ├── Enable
+                ├── Disable
+                ├── Scan
+                ├── List networks
+                ├── Connect
+                ├── Disconnect
+                ├── Forget network
+                ├── Reconnect
+                └── Get status
+
+Three things must be modeled separately:
+
+    GOALS
+    ACTIONS
+    STATE
+
+
+GOALS
+-----
+
+    WIFI_ENABLED
+    WIFI_DISABLED
+    CONNECTED(ssid)
+    DISCONNECTED
+    NETWORK_FORGOTTEN(ssid)
+    BEST_AVAILABLE_NETWORK_CONNECTED
+
+
+ACTIONS
+-------
+
+    wifi_enable()
+    wifi_disable()
+    wifi_scan()
+    wifi_connect(ssid)
+    wifi_disconnect()
+    wifi_forget(ssid)
+
+
+STATE
+-----
+
+    wifi_enabled: bool
+    connected: bool
+    ssid: string | null
+    known_networks: [...]
+    visible_networks: [...]
+    signal_strength: ...
+    internet_available: bool
+
+The user says:
+
+    "wifi on"
+
+This should be interpreted as a desired state:
+
+    goal = WIFI_ENABLED
+
+not necessarily as a direct action.
+
+If Wi-Fi is already enabled, the planner returns DONE without performing anything.
+
+
+============================================================
+13. WI-FI ENDPOINTS / FUNCTION BINDINGS
+============================================================
+
+Possible prototype API:
+
+    GET  /wifi/state
+
+    POST /wifi/enable
+    POST /wifi/disable
+
+    POST /wifi/scan
+
+    GET  /wifi/networks
+
+    POST /wifi/connect
+    {
+        "ssid": "VIT-WiFi"
+    }
+
+    POST /wifi/disconnect
+
+    POST /wifi/forget
+    {
+        "ssid": "VIT-WiFi"
+    }
+
+Internally, these endpoints can wrap:
+
+- NetworkManager
+- D-Bus
+- nmcli
+- iwd
+- another Linux networking backend
+
+The planner / RL system does not need to care about backend implementation.
+
+Action registry example:
+
+    A0 = WIFI_ENABLE
+    A1 = WIFI_DISABLE
+    A2 = WIFI_SCAN
+    A3 = WIFI_CONNECT
+    A4 = WIFI_DISCONNECT
+    A5 = WIFI_FORGET
+
+
+============================================================
+14. WI-FI STATE TRANSITION GRAPH
+============================================================
+
+Simplified deterministic version:
+
+                         enable
+              ┌────────────────────────┐
+              │                        ↓
+         WIFI_OFF                WIFI_ON_IDLE
+                                      │
+                                      │ scan
+                                      ↓
+                               NETWORKS_VISIBLE
+                                  /         \
+                           connect A      connect B
+                              ↓              ↓
+                       CONNECTED_A      CONNECTED_B
+                              │              │
+                              └── disconnect ┘
+                                      ↓
+                                 WIFI_ON_IDLE
+
+Real execution needs failure branches.
+
+Example:
+
+    CONNECT(network)
+        ├── success -> CONNECTED
+        ├── bad credentials -> AUTH_FAILED
+        ├── network disappears -> NETWORK_NOT_FOUND
+        └── timeout -> CONNECTION_FAILED
+
+These uncertain transitions are where RL can become useful.
+
+
+============================================================
+15. ACTION METADATA
+============================================================
+
+Each environment action should advertise semantic metadata.
+
+Example:
+
+    action: WIFI_DISABLE
+
+    preconditions:
+        wifi_enabled == true
+
+    effects:
+        wifi_enabled = false
+        connected = false
+
+    cost:
+        1
+
+    risk:
+        low
+
+    reversible:
+        yes
+
+    expected_latency:
+        low
+
+Example destructive action:
+
+    action: WIFI_FORGET(ssid)
+
+    preconditions:
+        ssid in known_networks
+
+    effects:
+        ssid removed from known_networks
+
+    risk:
+        medium
+
+    reversible:
+        no
+
+    confirmation_required:
+        possibly yes
+
+This action metadata allows the environment to communicate what can be done, when it can be done, what it changes, and how risky or costly it is.
+
+That shifts reasoning burden from the agent into the environment description.
+
+
+============================================================
+16. WHY GOALS SHOULD BE STATES, NOT BUTTON PRESSES
+============================================================
+
+Suppose the goal is:
+
+    DISCONNECTED
+
+and current state is:
+
+    CONNECTED(VIT)
+
+Possible actions include:
+
+    WIFI_DISABLE
+    WIFI_DISCONNECT
+    WIFI_FORGET(VIT)
+
+All might cause disconnection, but they have different side effects and costs.
+
+For example:
+
+    WIFI_DISCONNECT
+        cost = 1
+        side effects = low
+
+    WIFI_DISABLE
+        cost = 3
+        side effects = disables all Wi-Fi capability
+
+    WIFI_FORGET(VIT)
+        cost = 10
+        destructive = true
+
+A planner can therefore select the least costly action that achieves the requested goal.
+
+
+============================================================
+17. FACTORED STATE REPRESENTATION
+============================================================
+
+A complete computer state graph would explode combinatorially.
+
+Therefore the OS environment should use factored state variables.
+
+Example:
+
+    WiFi:
+        enabled
+        connected
+        ssid
+
+    Bluetooth:
+        enabled
+        connected_devices
+
+    Display:
+        brightness
+        night_light
+
+    Audio:
+        muted
+        volume
+        output
+
+Actions modify subsets of these variables.
+
+Example:
+
+    wifi_enable:
+        wifi.enabled = true
+
+This avoids enumerating every combination such as:
+
+    wifi_on + bluetooth_on + brightness_30 + volume_45 + ...
+
+The environment then resembles a factored MDP / planning system rather than a literal monolithic graph.
+
+
+============================================================
+18. UNIFORM ENVIRONMENT CONTRACT
+============================================================
+
+Each OS module should expose the same kind of structured contract:
+
+    STATE VARIABLES
+    GOALS
+    ACTIONS
+    PRECONDITIONS
+    EFFECTS
+    COSTS
+    RISKS
+    ENDPOINT BINDINGS
+
+Possible top-level modules:
+
+    Launch
+    Windows
+    Workspaces
+    Files
+    Search
+    Clipboard
+    Notifications
+    Quick Controls
+    Settings
+    Software
+    Open/Share
+    Overview
+
+The major architectural test is:
+
+    Can a new capability mostly be added by defining new state/action metadata and endpoint bindings while leaving the planner/policy infrastructure unchanged?
+
+If yes, the system is an agent-operable environment rather than a collection of one-off automation scripts.
+
+
+============================================================
+19. INITIAL WI-FI COMMAND SET FOR THE PROTOTYPE
+============================================================
+
+Start with only a few user-visible commands:
+
+    wifi on
+    wifi off
+    connect <ssid>
+    disconnect wifi
+    connect best
+
+These five commands are enough to test:
+
+- exact lookup
+- parameter extraction
+- deterministic graph planning
+- contextual bandit selection
+- RL navigation / recovery
+- state verification
+- failure recovery
+- escalation to LLM
+
+
+============================================================
+20. EXAMPLE ROUTING THROUGH THE SYSTEM
+============================================================
+
+CASE 1: "wifi on"
+-----------------
+
+    user
+      ↓
+    planner
+      ↓
+    lookup table / direct rule
+      ↓
+    WIFI_ENABLED goal
+      ↓
+    direct action or graph planner
+      ↓
+    doer
+      ↓
+    wifi.enable()
+      ↓
+    state observer
+      ↓
+    planner verifies goal
+      ↓
+    DONE
+
+
+CASE 2: "connect VIT-WiFi"
+--------------------------
+
+If Wi-Fi is off:
+
+    goal = CONNECTED("VIT-WiFi")
+
+Planner may produce:
+
+    ENABLE_WIFI
+    SCAN
+    CONNECT("VIT-WiFi")
+
+The Doer executes each action and state is verified after every transition.
+
+
+CASE 3: "connect me to the best network"
+----------------------------------------
+
+The target is not explicitly known.
+
+    planner
+      ↓
+    contextual bandit
+      ↓
+    choose best network based on context
+      ↓
+    planner
+      ↓
+    graph planner / RL
+      ↓
+    doer
+
+
+CASE 4: "the internet feels terrible, fix it"
+---------------------------------------------
+
+The semantic goal is unclear.
+
+    planner
+      ↓
+    LLM
+      ↓
+    structured interpretation
+      ↓
+    planner
+      ↓
+    cheap tools / RL / graph planner
+      ↓
+    doer
+
+The LLM leaves the loop once the request is converted into explicit goals/constraints.
+
+
+============================================================
+21. POSSIBLE RESEARCH CONTRIBUTION
+============================================================
+
+The likely research contribution is not merely "use RL instead of an LLM."
+
+The stronger idea is:
+
+    Expose the computer as an explicit semantic environment so that routine computer operation can be handled by the cheapest sufficient computational mechanism, escalating to expensive reasoning only when uncertainty or semantic novelty requires it.
+
+Possible architectural contribution:
+
+    Semantic computer environment
+        +
+    explicit affordance/action graph
+        +
+    direct function/endpoint bindings
+        +
+    deterministic planning
+        +
+    contextual policy selection
+        +
+    goal-conditioned RL
+        +
+    LLM as semantic exception handler
+        +
+    centralized planner/router
+
+Potential research hypothesis:
+
+    For recurrent, structurally known computer tasks, an environment-grounded control architecture can replace repeated language-model inference with deterministic planning, lookup, contextual bandits, or small RL policies, while preserving LLM escalation for ambiguous or novel requests.
+
+Possible evaluation dimensions:
+
+- task success rate
+- end-to-end latency
+- compute usage
+- energy use
+- number of model calls
+- number of actions
+- unnecessary action count
+- recovery from failures
+- robustness across changing state
+- user intent routing accuracy
+- escalation frequency
+- cost per completed task
+
+
+============================================================
+22. KEY PRINCIPLES THAT EMERGED
+============================================================
+
+1. The OS should expose semantic state, not force agents to rediscover state visually.
+
+2. User requests should be represented as desired states/goals, not button presses.
+
+3. The planner is the central control plane.
+
+4. Specialists return structured proposals to the planner; they do not directly operate the computer.
+
+5. The Doer alone executes endpoint-bound operations.
+
+6. The system should always use the cheapest sufficient computational mechanism.
+
+7. Exact known commands should never require an LLM.
+
+8. Deterministic multi-step problems should use symbolic graph planning before RL.
+
+9. Contextual bandits are suitable for one-step strategy/option selection.
+
+10. RL is suitable for uncertain sequential control.
+
+11. LLMs are reserved for semantic novelty, ambiguity, open-ended interpretation, or difficult reasoning.
+
+12. The LLM should return structured goals/constraints and then subordinate execution back to the planner.
+
+13. Every action should advertise preconditions, effects, costs, risks, reversibility, and endpoint bindings.
+
+14. System state should be factored into variables rather than enumerated as one gigantic graph.
+
+15. New OS capabilities should ideally require environment-description additions, not planner redesign.
+
+16. Intelligence should be treated as a dynamically allocated computational resource.
+
+17. The central question is not "how intelligent can the agent be?" but "how much intelligence is actually necessary once the environment is structured correctly?"
+
+
+============================================================
+23. IMMEDIATE NEXT BUILD STEP
+============================================================
+
+Prototype only:
+
+    Quick Controls -> Wi-Fi
+
+Define completely:
+
+- state variables
+- supported goals
+- actions
+- preconditions
+- effects
+- costs
+- risks
+- endpoint bindings
+- deterministic transitions
+- failure transitions
+- planner routing rules
+- graph planner baseline
+- contextual bandit case
+- goal-conditioned RL case
+- LLM escalation case
+
+Then compare all mechanisms experimentally.
+
+The purpose is not to implement the entire OS.
+
+The purpose is to validate whether an agent-native environment can collapse routine computer control from repeated large-model reasoning into cheap structured control.
+

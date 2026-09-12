@@ -1,4 +1,34 @@
-# sv
+# AgentOS research desktop
+
+A functional SvelteKit desktop simulation backed by a semantic control graph. Human interactions and remote commands use the same async dispatcher and emit the same inspectable events.
+
+## Run
+
+```sh
+bun run dev
+```
+
+## Invoke nodes
+
+From the in-desktop Control Graph Inspector, enter a node ID such as `panel.network`, `wifi.toggle`, or `desktop.research`.
+
+From another process, send any action to the single control endpoint:
+
+```sh
+curl -X POST http://127.0.0.1:5173/api/control \
+  -H 'content-type: application/json' \
+  -d '{"node":"panel.network"}'
+```
+
+Input nodes accept a payload:
+
+```sh
+curl -X POST http://127.0.0.1:5173/api/control \
+  -H 'content-type: application/json' \
+  -d '{"node":"menu.search","input":"Files"}'
+```
+
+The browser also exposes `window.agentOS.dispatch()`, listens for `agentos:command` custom events and `postMessage` commands, and receives server commands over one EventSource connection. Use the Inspector's Events, Nodes, and State tabs—or the browser console—to observe every transition.
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 
