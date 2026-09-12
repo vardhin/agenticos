@@ -1,13 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { createOSRuntime } from '$lib/os/runtime';
-	import type { OSCommand } from '$lib/os/types';
+	import type { OSCommand, WindowName } from '$lib/os/types';
 
 	const runtime = createOSRuntime();
 	const osState = runtime.state;
 	const osEvents = runtime.events;
 	let invokeValue = $state('panel.network');
 	let clock = $state(new Date());
+	let settingsSection = $state('Appearance');
+	let softwareSearch = $state('');
+	let fileSearch = $state('');
+	let selectedFile = $state('');
 
 	const desktopIcons = [
 		{ id: 'desktop.home', label: 'Home', icon: '/assets/icons/home.svg' },
@@ -17,6 +21,12 @@
 	];
 
 	const applications = [
+		{
+			id: 'menu.browser.open',
+			label: 'Browser',
+			note: 'Browse the web',
+			icon: '/assets/icons/browser.svg'
+		},
 		{
 			id: 'menu.editor.open',
 			label: 'Text Editor',
@@ -34,8 +44,61 @@
 			label: 'Terminal',
 			note: 'Use the command line',
 			icon: '/assets/icons/terminal.svg'
+		},
+		{
+			id: 'menu.settings.open',
+			label: 'Settings',
+			note: 'Configure your system',
+			icon: '/assets/icons/settings.svg'
+		},
+		{
+			id: 'menu.software.open',
+			label: 'Software',
+			note: 'Install and update apps',
+			icon: '/assets/icons/drive.svg'
 		}
 	];
+
+	const files = [
+		{ name: 'Desktop', kind: 'folder', meta: '6 items' },
+		{ name: 'Documents', kind: 'folder', meta: '12 items' },
+		{ name: 'Downloads', kind: 'folder', meta: '8 items' },
+		{ name: 'Pictures', kind: 'folder', meta: '34 items' },
+		{ name: 'Research', kind: 'folder', meta: '4 items' },
+		{ name: 'desktop-actions-notes.txt', kind: 'text', meta: '2.1 KB · Today' },
+		{ name: 'agent-architecture.pdf', kind: 'pdf', meta: '1.8 MB · Yesterday' },
+		{ name: 'research-assets.zip', kind: 'archive', meta: '14.2 MB · Sep 10' }
+	];
+	const visibleFiles = $derived(
+		files.filter((file) => file.name.toLowerCase().includes(fileSearch.toLowerCase()))
+	);
+	const software = [
+		{ name: 'Firefox', category: 'Web', rating: '4.8', description: 'Fast, private web browser' },
+		{
+			name: 'LibreOffice',
+			category: 'Productivity',
+			rating: '4.6',
+			description: 'Documents, sheets and presentations'
+		},
+		{
+			name: 'VLC',
+			category: 'Audio & Video',
+			rating: '4.9',
+			description: 'Play virtually any media file'
+		},
+		{
+			name: 'Krita',
+			category: 'Graphics',
+			rating: '4.7',
+			description: 'Professional digital painting'
+		},
+		{ name: 'Signal', category: 'Communication', rating: '4.8', description: 'Private messaging' }
+	];
+	const visibleSoftware = $derived(
+		software.filter((app) =>
+			`${app.name} ${app.category}`.toLowerCase().includes(softwareSearch.toLowerCase())
+		)
+	);
 
 	const filteredApplications = $derived(
 		applications.filter((app) =>
@@ -75,6 +138,22 @@
 		};
 		window.addEventListener('agentos:command', receiveCommand);
 		window.addEventListener('message', receiveMessage);
+		const keyboard = (event: KeyboardEvent) => {
+			if (event.key === 'Meta' || (event.ctrlKey && event.code === 'Space')) {
+				event.preventDefault();
+				void runtime.dispatch('panel.menu');
+			}
+			if (event.altKey && event.key === 'Tab') {
+				event.preventDefault();
+				void runtime.dispatch('panel.overview');
+			}
+			if (event.key === 'PrintScreen') void runtime.dispatch('panel.capture');
+			if (event.key === 'Escape' && $osState.overlay)
+				void runtime.dispatch(
+					`panel.${$osState.overlay === 'launcher' ? 'menu' : $osState.overlay}`
+				);
+		};
+		window.addEventListener('keydown', keyboard);
 		(window as unknown as { agentOS: unknown }).agentOS = {
 			dispatch: (command: OSCommand | string) => runtime.dispatch(command, 'remote'),
 			listNodes: () => runtime.graph,
@@ -90,10 +169,11 @@
 			stream.close();
 			window.removeEventListener('agentos:command', receiveCommand);
 			window.removeEventListener('message', receiveMessage);
+			window.removeEventListener('keydown', keyboard);
 		};
 	});
 
-	function beginDrag(event: PointerEvent, name: 'editor' | 'inspector' | 'files') {
+	function beginDrag(event: PointerEvent, name: WindowName) {
 		if ($osState.windows[name].maximized || (event.target as HTMLElement).closest('button')) return;
 		void runtime.dispatch(`window.${name}`, 'human');
 		const start = $osState.windows[name];
@@ -117,11 +197,16 @@
 		window.addEventListener('pointerup', end, { once: true });
 	}
 
-	function windowStyle(name: 'editor' | 'inspector' | 'files'): string {
+	function windowStyle(name: WindowName): string {
 		const current = $osState.windows[name];
 		return current.maximized
 			? `z-index:${current.z}`
 			: `left:${current.x}px;top:${current.y}px;z-index:${current.z}`;
+	}
+
+	function isVisible(name: WindowName) {
+		const item = $osState.windows[name];
+		return item.open && !item.minimized && item.workspace === $osState.workspace;
 	}
 
 	async function invokeNode() {
@@ -146,7 +231,12 @@
 	/></svelte:head
 >
 
-<main class="desktop" aria-label="AgentOS desktop">
+<main
+	class:light-theme={!$osState.darkMode}
+	class="desktop"
+	aria-label="AgentOS desktop"
+	style={`--screen-brightness:${$osState.brightness}%`}
+>
 	<section class="desktop-icons" aria-label="Desktop items">
 		{#each desktopIcons as item (item.id)}
 			<button
@@ -160,7 +250,7 @@
 		{/each}
 	</section>
 
-	{#if $osState.windows.editor.open && !$osState.windows.editor.minimized}
+	{#if isVisible('editor')}
 		<section
 			class:maximized={$osState.windows.editor.maximized}
 			class="window editor-window"
@@ -244,7 +334,7 @@
 		</section>
 	{/if}
 
-	{#if $osState.windows.inspector.open && !$osState.windows.inspector.minimized}
+	{#if isVisible('inspector')}
 		<section
 			class:maximized={$osState.windows.inspector.maximized}
 			class="window inspector-window"
@@ -352,7 +442,7 @@
 		</section>
 	{/if}
 
-	{#if $osState.windows.files.open && !$osState.windows.files.minimized}
+	{#if isVisible('files')}
 		<section
 			class:maximized={$osState.windows.files.maximized}
 			class="window files-window"
@@ -369,6 +459,22 @@
 				<div class="window-title">{$osState.filesPath}</div>
 				<div class="window-controls">
 					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.files.minimize');
+						}}
+						aria-label="Minimize Files"
+						><img src="/assets/icons/window-minimize.svg" alt="" /></button
+					>
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.files.maximize');
+						}}
+						aria-label="Maximize Files"
+						><img src="/assets/icons/window-maximize.svg" alt="" /></button
+					>
+					<button
 						class="close"
 						onclick={(event) => {
 							event.stopPropagation();
@@ -382,21 +488,619 @@
 				<button aria-label="Back"><img src="/assets/icons/go-previous.svg" alt="" /></button><button
 					aria-label="Forward"><img src="/assets/icons/go-next.svg" alt="" /></button
 				><span><img src="/assets/icons/go-home.svg" alt="" /> {$osState.filesPath}</span>
+				<label class="files-search"
+					><img src="/assets/icons/search.svg" alt="" /><input
+						aria-label="Search files"
+						placeholder="Search"
+						bind:value={fileSearch}
+					/></label
+				>
+				<button
+					class="new-button"
+					onclick={() => runtime.dispatch({ node: 'files.action', input: 'New folder created' })}
+					>+ New</button
+				>
 			</div>
 			<div class="files-body">
 				<aside>
-					<strong>Places</strong><button>Home</button><button>Desktop</button><button
-						>Documents</button
-					><button>Downloads</button><button>Trash</button>
-				</aside>
-				<div class="folder-grid">
-					{#each ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Research'] as folder (folder)}<button
-							><img src="/assets/icons/folder.svg" alt="" /><span>{folder}</span></button
+					<strong>Places</strong>
+					{#each ['Home', 'Desktop', 'Documents', 'Downloads', 'Recent', 'Starred', 'Trash'] as place (place)}<button
+							class:active={$osState.filesPath === place}
+							onclick={() => runtime.dispatch({ node: 'files.path', input: place })}>{place}</button
 						>{/each}
+					<strong>Devices</strong><button
+						onclick={() => runtime.dispatch({ node: 'files.path', input: 'Archive USB' })}
+						>Archive USB <small>32 GB</small></button
+					>
+				</aside>
+				<div class="files-main">
+					<div class="files-heading">
+						<div>
+							<strong>{$osState.filesPath}</strong><small
+								>{visibleFiles.length} items · sorted by name</small
+							>
+						</div>
+						<button aria-label="Grid view">▦</button><button aria-label="Sort files">↕</button>
+					</div>
+					<div class="folder-grid">
+						{#each visibleFiles as file (file.name)}<button
+								class:selected={selectedFile === file.name}
+								onclick={() => (selectedFile = file.name)}
+								ondblclick={() =>
+									file.kind === 'folder'
+										? runtime.dispatch({ node: 'files.path', input: file.name })
+										: runtime.dispatch({ node: 'files.action', input: `Opened ${file.name}` })}
+							>
+								<img
+									src={file.kind === 'folder'
+										? '/assets/icons/folder.svg'
+										: file.kind === 'text'
+											? '/assets/icons/editor.svg'
+											: '/assets/icons/drive.svg'}
+									alt=""
+								/><span>{file.name}</span><small>{file.meta}</small>
+							</button>{/each}
+					</div>
+					{#if selectedFile}<div class="file-actions">
+							<span>{selectedFile}</span><button
+								onclick={() =>
+									runtime.dispatch({ node: 'files.action', input: `Shared ${selectedFile}` })}
+								>Share</button
+							><button
+								onclick={() =>
+									runtime.dispatch({ node: 'files.action', input: `Renamed ${selectedFile}` })}
+								>Rename</button
+							><button
+								onclick={() =>
+									runtime.dispatch({
+										node: 'files.action',
+										input: `Moved ${selectedFile} to Trash`
+									})}>Trash</button
+							>
+						</div>{/if}
 				</div>
 			</div>
 		</section>
 	{/if}
+
+	{#if isVisible('settings')}
+		<section
+			class:maximized={$osState.windows.settings.maximized}
+			class="window settings-window"
+			style={windowStyle('settings')}
+			aria-label="Settings window"
+			onpointerdown={() => runtime.dispatch('window.settings')}
+		>
+			<header
+				class="titlebar"
+				role="toolbar"
+				tabindex="-1"
+				onpointerdown={(event) => beginDrag(event, 'settings')}
+			>
+				<div class="window-title">Settings</div>
+				<div class="window-controls">
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.settings.minimize');
+						}}
+						aria-label="Minimize Settings"
+						><img src="/assets/icons/window-minimize.svg" alt="" /></button
+					>
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.settings.maximize');
+						}}
+						aria-label="Maximize Settings"
+						><img src="/assets/icons/window-maximize.svg" alt="" /></button
+					>
+					<button
+						class="close"
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.settings.close');
+						}}
+						aria-label="Close Settings"><img src="/assets/icons/window-close.svg" alt="" /></button
+					>
+				</div>
+			</header>
+			<div class="settings-shell">
+				<aside class="settings-sidebar">
+					<label
+						><img src="/assets/icons/search.svg" alt="" /><input
+							aria-label="Search settings"
+							placeholder="Search settings"
+						/></label
+					>
+					{#each ['Network', 'Bluetooth', 'Displays', 'Sound', 'Appearance', 'Applications', 'Notifications', 'Keyboard', 'Mouse & Touchpad', 'Accessibility', 'Date & Language', 'Users'] as section (section)}
+						<button
+							class:active={settingsSection === section}
+							onclick={() => (settingsSection = section)}>{section}</button
+						>
+					{/each}
+				</aside>
+				<div class="settings-content">
+					<p class="eyebrow">SYSTEM SETTINGS</p>
+					<h1>{settingsSection}</h1>
+					{#if settingsSection === 'Appearance'}
+						<div class="setting-card">
+							<h2>Colour scheme</h2>
+							<p>Use a consistent appearance across the desktop and apps.</p>
+							<div class="theme-options">
+								<button
+									class:chosen={!$osState.darkMode}
+									onclick={() => $osState.darkMode && runtime.dispatch('control.theme.toggle')}
+									><i class="light-preview"></i>Light</button
+								><button
+									class:chosen={$osState.darkMode}
+									onclick={() => !$osState.darkMode && runtime.dispatch('control.theme.toggle')}
+									><i class="dark-preview"></i>Dark</button
+								>
+							</div>
+						</div>
+						<div class="setting-card row-setting">
+							<div>
+								<h2>Accent colour</h2>
+								<p>Used for selections and active controls.</p>
+							</div>
+							<div class="swatches"><i></i><i></i><i></i><i></i></div>
+						</div>
+						<div class="setting-card row-setting">
+							<div>
+								<h2>Text size</h2>
+								<p>Default · 100%</p>
+							</div>
+							<input aria-label="Text size" type="range" min="80" max="150" value="100" />
+						</div>
+					{:else if settingsSection === 'Applications'}
+						<div class="setting-card">
+							<h2>Default applications</h2>
+							{#each [['Web', 'Firefox'], ['Text', 'Text Editor'], ['Photos', 'Image Viewer'], ['Video', 'VLC'], ['PDF', 'Document Viewer'], ['Terminal', 'Terminal']] as item (item[0])}<div
+									class="default-row"
+								>
+									<span>{item[0]}</span><button>{item[1]}⌄</button>
+								</div>{/each}
+						</div>
+					{:else if settingsSection === 'Accessibility'}
+						<div class="setting-card">
+							<h2>Seeing</h2>
+							{#each ['High contrast', 'Large text', 'Screen reader', 'Magnifier'] as item (item)}<label
+									class="toggle-row"><span>{item}</span><input type="checkbox" /></label
+								>{/each}
+						</div>
+						<div class="setting-card">
+							<h2>Typing & motion</h2>
+							{#each ['Sticky keys', 'Slow keys', 'Reduce motion'] as item (item)}<label
+									class="toggle-row"><span>{item}</span><input type="checkbox" /></label
+								>{/each}
+						</div>
+					{:else}
+						<div class="setting-card">
+							<h2>{settingsSection}</h2>
+							<p>Manage {settingsSection.toLowerCase()} preferences from one place.</p>
+							{#each ['Primary device', 'Automatic configuration', 'Remember this setting'] as item (item)}<label
+									class="toggle-row"
+									><span>{item}</span><input
+										type="checkbox"
+										checked={item !== 'Primary device'}
+									/></label
+								>{/each}
+						</div>
+					{/if}
+				</div>
+			</div>
+		</section>
+	{/if}
+
+	{#if isVisible('software')}
+		<section
+			class:maximized={$osState.windows.software.maximized}
+			class="window software-window"
+			style={windowStyle('software')}
+			aria-label="Software window"
+			onpointerdown={() => runtime.dispatch('window.software')}
+		>
+			<header
+				class="titlebar"
+				role="toolbar"
+				tabindex="-1"
+				onpointerdown={(event) => beginDrag(event, 'software')}
+			>
+				<div class="window-title">Software</div>
+				<div class="window-controls">
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.software.minimize');
+						}}
+						aria-label="Minimize Software"
+						><img src="/assets/icons/window-minimize.svg" alt="" /></button
+					><button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.software.maximize');
+						}}
+						aria-label="Maximize Software"
+						><img src="/assets/icons/window-maximize.svg" alt="" /></button
+					><button
+						class="close"
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.software.close');
+						}}
+						aria-label="Close Software"><img src="/assets/icons/window-close.svg" alt="" /></button
+					>
+				</div>
+			</header>
+			<div class="software-top">
+				<div>
+					<h1>Discover software</h1>
+					<p>Arch repositories and Flatpak, together.</p>
+				</div>
+				<label
+					><img src="/assets/icons/search.svg" alt="" /><input
+						aria-label="Search software"
+						placeholder="Search software"
+						bind:value={softwareSearch}
+					/></label
+				>
+			</div>
+			<nav class="software-tabs">
+				<button class="active">Explore</button><button
+					>Installed <span>{$osState.installedApps.length}</span></button
+				><button>Updates <span>3</span></button>
+			</nav>
+			<div class="featured-app">
+				<div class="feature-icon">✦</div>
+				<div>
+					<small>EDITOR'S CHOICE</small>
+					<h2>Build your perfect workspace</h2>
+					<p>Useful tools, curated for AgentOS and verified for your system.</p>
+				</div>
+				<button>Explore collection</button>
+			</div>
+			<div class="software-list">
+				<h2>Popular applications</h2>
+				{#each visibleSoftware as app (app.name)}<article>
+						<div class="app-monogram">{app.name[0]}</div>
+						<div>
+							<strong>{app.name}</strong>
+							<p>{app.description}</p>
+							<small>{app.category} · ★ {app.rating}</small>
+						</div>
+						<button
+							class:installed={$osState.installedApps.includes(app.name)}
+							onclick={() => runtime.dispatch({ node: 'software.toggle', input: app.name })}
+							>{$osState.installedApps.includes(app.name) ? 'Remove' : 'Install'}</button
+						>
+					</article>{/each}
+			</div>
+		</section>
+	{/if}
+
+	{#if isVisible('terminal')}
+		<section
+			class:maximized={$osState.windows.terminal.maximized}
+			class="window terminal-window"
+			style={windowStyle('terminal')}
+			aria-label="Terminal window"
+			onpointerdown={() => runtime.dispatch('window.terminal')}
+		>
+			<header
+				class="titlebar"
+				role="toolbar"
+				tabindex="-1"
+				onpointerdown={(event) => beginDrag(event, 'terminal')}
+			>
+				<div class="window-title">Terminal — researcher@agentos</div>
+				<div class="window-controls">
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.terminal.minimize');
+						}}
+						aria-label="Minimize Terminal"
+						><img src="/assets/icons/window-minimize.svg" alt="" /></button
+					><button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.terminal.maximize');
+						}}
+						aria-label="Maximize Terminal"
+						><img src="/assets/icons/window-maximize.svg" alt="" /></button
+					><button
+						class="close"
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.terminal.close');
+						}}
+						aria-label="Close Terminal"><img src="/assets/icons/window-close.svg" alt="" /></button
+					>
+				</div>
+			</header>
+			<div class="terminal-body">
+				<p>AgentOS 0.4.0 <span>· Arch Linux</span></p>
+				<p>
+					Last login: Today at {clock.toLocaleTimeString([], {
+						hour: '2-digit',
+						minute: '2-digit'
+					})}
+				</p>
+				<label
+					><strong>researcher@agentos</strong><span> ~ $ </span><input
+						aria-label="Terminal command"
+					/></label
+				>
+			</div>
+		</section>
+	{/if}
+
+	{#if $osState.overlay === 'launcher'}
+		<div
+			class="overlay-scrim"
+			role="presentation"
+			onclick={() => runtime.dispatch('panel.menu')}
+		></div>
+		<section class="command-centre" aria-label="Application menu">
+			<label class="global-search"
+				><img src="/assets/icons/search.svg" alt="" /><input
+					aria-label="Search applications"
+					placeholder="Search apps, files, settings and actions…"
+					value={$osState.menuSearch}
+					oninput={(event) =>
+						runtime.dispatch({ node: 'menu.search', input: event.currentTarget.value })}
+				/><kbd>esc</kbd></label
+			>
+			<div class="search-layout">
+				<aside>
+					<button class="active">All</button><button>Applications</button><button>Files</button
+					><button>Settings</button><button>Actions</button><span></span><button>Recent</button>
+				</aside>
+				<div class="search-results">
+					<p class="section-label">APPLICATIONS</p>
+					<div class="launcher-apps">
+						{#each filteredApplications as app (app.id)}<button
+								onclick={() => runtime.dispatch(app.id)}
+								><img src={app.icon} alt="" /><span>{app.label}</span><small>{app.note}</small
+								></button
+							>{/each}
+					</div>
+					<p class="section-label">RECENT FILES</p>
+					{#each files
+						.slice(5)
+						.filter((file) => file.name
+								.toLowerCase()
+								.includes($osState.menuSearch.toLowerCase())) as file (file.name)}<button
+							class="search-result"
+							onclick={() => {
+								runtime.dispatch('menu.files.open');
+								selectedFile = file.name;
+							}}
+							><img
+								src={file.kind === 'text' ? '/assets/icons/editor.svg' : '/assets/icons/drive.svg'}
+								alt=""
+							/><span><strong>{file.name}</strong><small>Home / Research · {file.meta}</small></span
+							><kbd>↵</kbd></button
+						>{/each}
+					<p class="section-label">QUICK ACTIONS</p>
+					<div class="quick-actions">
+						<button onclick={() => runtime.dispatch('panel.capture')}>▣ Screenshot</button><button
+							onclick={() => runtime.dispatch('menu.settings.open')}>⚙ Settings</button
+						><button onclick={() => runtime.dispatch('panel.power')}>⏻ Power</button>
+					</div>
+				</div>
+			</div>
+			<footer>
+				<span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> open</span><span
+					>Search replaces menus, not capability.</span
+				>
+			</footer>
+		</section>
+	{/if}
+
+	{#if $osState.overlay === 'overview'}
+		<div class="overview" aria-label="Workspace overview">
+			<header>
+				<div>
+					<p class="eyebrow">OVERVIEW</p>
+					<h1>Your workspace</h1>
+				</div>
+				<button onclick={() => runtime.dispatch('panel.menu')}
+					><img src="/assets/icons/search.svg" alt="" /> Search</button
+				>
+			</header>
+			<div class="workspace-strip">
+				{#each [1, 2, 3, 4] as workspace (workspace)}<button
+						class:active={$osState.workspace === workspace}
+						onclick={() => runtime.dispatch({ node: 'workspace.switch', input: workspace })}
+						><span class="workspace-mini"
+							><i></i>{#each Object.entries($osState.windows)
+								.filter(([, value]) => value.open && value.workspace === workspace)
+								.slice(0, 3) as [previewName, value] (previewName)}<b
+									style={`left:${Math.min(72, value.x / 16)}%;top:${Math.min(65, value.y / 12)}%`}
+								></b>{/each}</span
+						><strong>{workspace}</strong><small
+							>{workspace === $osState.workspace
+								? 'Current'
+								: `${Object.values($osState.windows).filter((item) => item.open && item.workspace === workspace).length} windows`}</small
+						></button
+					>{/each}<button class="add-workspace">＋<small>New</small></button>
+			</div>
+			<div class="open-windows">
+				<p class="section-label">OPEN WINDOWS</p>
+				<div>
+					{#each Object.entries($osState.windows).filter(([, value]) => value.open) as [name, value] (name)}<article
+						>
+							<button
+								class="window-preview"
+								onclick={() => {
+									runtime.dispatch({ node: 'workspace.switch', input: value.workspace });
+									runtime.dispatch(`window.${name}`);
+								}}
+								><span class="preview-bar"><i></i><i></i><i></i></span><strong
+									>{name === 'inspector'
+										? 'Control Graph'
+										: name[0].toUpperCase() + name.slice(1)}</strong
+								><small>Workspace {value.workspace}</small></button
+							>
+							<div class="move-window">
+								Move to {#each [1, 2, 3, 4] as workspace (workspace)}<button
+										class:active={value.workspace === workspace}
+										onclick={() =>
+											runtime.dispatch({
+												node: 'workspace.window.move',
+												input: { window: name, workspace }
+											})}>{workspace}</button
+									>{/each}
+							</div>
+						</article>{/each}
+				</div>
+			</div>
+			<button class="close-overview" onclick={() => runtime.dispatch('panel.overview')}
+				>Close overview <kbd>Esc</kbd></button
+			>
+		</div>
+	{/if}
+
+	{#if $osState.overlay === 'control'}
+		<section class="control-centre" aria-label="Control Centre">
+			<header>
+				<div>
+					<p class="eyebrow">CONTROL CENTRE</p>
+					<h2>Quick settings</h2>
+				</div>
+				<button onclick={() => runtime.dispatch('menu.settings.open')}>All settings</button>
+			</header>
+			<div class="quick-grid">
+				<button class:active={$osState.wifiEnabled} onclick={() => runtime.dispatch('wifi.toggle')}
+					><i>◉</i><span
+						><strong>Wi-Fi</strong><small>{$osState.connectedNetwork ?? 'Off'}</small></span
+					></button
+				><button
+					class:active={$osState.bluetoothEnabled}
+					onclick={() => runtime.dispatch('control.bluetooth.toggle')}
+					><i>ᛒ</i><span
+						><strong>Bluetooth</strong><small>{$osState.bluetoothEnabled ? 'On' : 'Off'}</small
+						></span
+					></button
+				><button
+					class:active={$osState.doNotDisturb}
+					onclick={() => runtime.dispatch('control.dnd.toggle')}
+					><i>☾</i><span
+						><strong>Do Not Disturb</strong><small>{$osState.doNotDisturb ? 'On' : 'Off'}</small
+						></span
+					></button
+				><button
+					class:active={!$osState.darkMode}
+					onclick={() => runtime.dispatch('control.theme.toggle')}
+					><i>◐</i><span
+						><strong>Appearance</strong><small>{$osState.darkMode ? 'Dark' : 'Light'}</small></span
+					></button
+				>
+			</div>
+			<label class="slider-row"
+				><span>☀</span><input
+					aria-label="Brightness"
+					type="range"
+					min="10"
+					max="100"
+					value={$osState.brightness}
+					oninput={(event) =>
+						runtime.dispatch({ node: 'control.brightness', input: event.currentTarget.value })}
+				/><strong>{$osState.brightness}%</strong></label
+			><label class="slider-row"
+				><span>◕</span><input
+					aria-label="Volume"
+					type="range"
+					min="0"
+					max="100"
+					value={$osState.volume}
+					oninput={(event) =>
+						runtime.dispatch({ node: 'control.volume', input: event.currentTarget.value })}
+				/><strong>{$osState.volume}%</strong></label
+			>
+			<div class="notification-head">
+				<h2>Notifications <span>{$osState.notifications.length}</span></h2>
+				{#if $osState.notifications.length}<button
+						onclick={() => runtime.dispatch('notifications.clear')}>Clear all</button
+					>{/if}
+			</div>
+			<div class="notifications">
+				{#each $osState.notifications as notification (notification.id)}<article
+						class:unread={notification.unread}
+					>
+						<i>{notification.app[0]}</i>
+						<div>
+							<strong>{notification.title}</strong>
+							<p>{notification.body}</p>
+							<small>{notification.app} · {notification.time}</small>
+						</div>
+						<button
+							aria-label={`Dismiss ${notification.title}`}
+							onclick={() =>
+								runtime.dispatch({ node: 'notifications.dismiss', input: notification.id })}
+							>×</button
+						>
+					</article>{/each}{#if !$osState.notifications.length}<p class="empty-state">
+						You're all caught up.
+					</p>{/if}
+			</div>
+		</section>
+	{/if}
+
+	{#if $osState.overlay === 'clipboard'}
+		<section class="small-popover clipboard-popover" aria-label="Clipboard history">
+			<header>
+				<div>
+					<p class="eyebrow">CLIPBOARD</p>
+					<h2>Recent copies</h2>
+				</div>
+				<span>Super V</span>
+			</header>
+			{#each $osState.clipboard as item, index (item)}<button
+					onclick={() => runtime.dispatch({ node: 'clipboard.copy', input: item })}
+					><small>{index === 0 ? 'CURRENT' : `${index + 1}`}</small><span>{item}</span><b>Copy</b
+					></button
+				>{/each}
+			<footer>
+				<button onclick={() => runtime.dispatch({ node: 'clipboard.copy', input: 'Pinned note' })}
+					>＋ Add pinned note</button
+				>
+			</footer>
+		</section>
+	{/if}
+
+	{#if $osState.overlay === 'capture'}
+		<section class="capture-bar" aria-label="Screen capture">
+			<div><button class="active">Screenshot</button><button>Record</button></div>
+			<span></span>{#each ['Full screen', 'Window', 'Selection'] as mode (mode)}<button
+					onclick={() => runtime.dispatch({ node: 'capture.save', input: mode })}
+					>{mode === 'Full screen' ? '▣' : mode === 'Window' ? '▤' : '⌗'}<small>{mode}</small
+					></button
+				>{/each}<span></span><button
+				class="capture-action"
+				onclick={() => runtime.dispatch({ node: 'capture.save', input: 'Screenshot' })}
+				>Capture</button
+			>
+		</section>
+	{/if}
+
+	{#if $osState.overlay === 'power'}
+		<section class="power-menu" aria-label="Power menu">
+			<div class="avatar">A</div>
+			<h2>Researcher</h2>
+			<p>What would you like to do?</p>
+			<div>
+				{#each [['↶', 'Log Out'], ['▣', 'Lock'], ['↻', 'Restart'], ['⏻', 'Power Off']] as action (action[1])}<button
+						onclick={() => runtime.dispatch('panel.power')}><i>{action[0]}</i>{action[1]}</button
+					>{/each}
+			</div>
+			<button onclick={() => runtime.dispatch('panel.power')}>Cancel</button>
+		</section>
+	{/if}
+
+	{#if $osState.toast}<div class="toast" role="status">✓ {$osState.toast}</div>{/if}
 
 	{#if $osState.menuOpen}
 		<section class="app-menu" aria-label="Application menu">
@@ -461,7 +1165,7 @@
 	<nav class="panel" aria-label="System panel">
 		<div class="panel-left">
 			<button
-				class:active={$osState.menuOpen}
+				class:active={$osState.overlay === 'launcher'}
 				class="launcher"
 				onclick={() => runtime.dispatch('panel.menu')}
 				aria-label="Applications"><img src="/assets/icons/menu.svg" alt="" /></button
@@ -471,6 +1175,12 @@
 				class="pinned"
 				onclick={() => runtime.dispatch('menu.terminal.open')}
 				aria-label="Terminal"><img src="/assets/icons/terminal.svg" alt="" /></button
+			>
+			<button
+				class:active={$osState.overlay === 'overview'}
+				class="workspace-button"
+				onclick={() => runtime.dispatch('panel.overview')}
+				aria-label="Overview"><span>{$osState.workspace}</span><small>Workspace</small></button
 			>
 			<button
 				class:active={$osState.focusedWindow === 'editor'}
@@ -486,11 +1196,21 @@
 		</div>
 		<div class="panel-right">
 			<button
+				class:active={$osState.overlay === 'clipboard'}
+				onclick={() => runtime.dispatch('panel.clipboard')}
+				aria-label="Clipboard history"><span class="panel-glyph">▣</span></button
+			>
+			<button
+				class:active={$osState.overlay === 'capture'}
+				onclick={() => runtime.dispatch('panel.capture')}
+				aria-label="Screen capture"><span class="panel-glyph">⌗</span></button
+			>
+			<button
 				class:active={$osState.wifiOpen}
 				onclick={() => runtime.dispatch('panel.network')}
 				aria-label="Network"><img src="/assets/icons/wifi.svg" alt="" /></button
 			><button
-				onclick={() => runtime.dispatch('panel.sound')}
+				onclick={() => runtime.dispatch('panel.control')}
 				aria-label={`Volume ${$osState.volume}%`}
 				><img src="/assets/icons/volume.svg" alt="" /></button
 			><img class="tray-icon" src="/assets/icons/battery.svg" alt="Battery 80%" /><span

@@ -23,22 +23,46 @@ export interface WindowState {
 	x: number;
 	y: number;
 	z: number;
+	workspace: number;
+}
+
+export type WindowName = 'editor' | 'inspector' | 'files' | 'settings' | 'software' | 'terminal';
+export type OverlayName =
+	'launcher' | 'overview' | 'control' | 'clipboard' | 'capture' | 'power' | null;
+
+export interface NotificationItem {
+	id: number;
+	app: string;
+	title: string;
+	body: string;
+	time: string;
+	unread: boolean;
 }
 
 export interface OSState {
 	focusedNode: string;
-	focusedWindow: 'editor' | 'inspector' | 'files' | null;
+	focusedWindow: WindowName | null;
 	menuOpen: boolean;
 	wifiOpen: boolean;
+	overlay: OverlayName;
+	workspace: number;
 	wifiEnabled: boolean;
+	bluetoothEnabled: boolean;
+	doNotDisturb: boolean;
+	darkMode: boolean;
 	connectedNetwork: string | null;
 	volume: number;
+	brightness: number;
 	menuSearch: string;
 	inspectorTab: 'events' | 'nodes' | 'state' | 'settings';
 	inspectorQuery: string;
 	editorText: string;
 	filesPath: string;
-	windows: Record<'editor' | 'inspector' | 'files', WindowState>;
+	clipboard: string[];
+	notifications: NotificationItem[];
+	installedApps: string[];
+	toast: string | null;
+	windows: Record<WindowName, WindowState>;
 }
 
 export interface ActionEvent {

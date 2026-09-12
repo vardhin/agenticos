@@ -1,6 +1,13 @@
 import { get, writable } from 'svelte/store';
 import { controlGraph, nodeById } from './graph';
-import type { ActionEvent, CommandSource, OSCommand, OSState } from './types';
+import type {
+	ActionEvent,
+	CommandSource,
+	OSCommand,
+	OSState,
+	OverlayName,
+	WindowName
+} from './types';
 
 const initialText = `Desktop Actions — Research Notes
 Sunday, September 13, 2026
@@ -34,18 +41,88 @@ export const initialState: OSState = {
 	focusedWindow: 'inspector',
 	menuOpen: false,
 	wifiOpen: false,
+	overlay: null,
+	workspace: 1,
 	wifiEnabled: true,
+	bluetoothEnabled: true,
+	doNotDisturb: false,
+	darkMode: true,
 	connectedNetwork: 'StudioNet',
 	volume: 72,
+	brightness: 84,
 	menuSearch: '',
 	inspectorTab: 'events',
 	inspectorQuery: '',
 	editorText: initialText,
 	filesPath: 'Home',
+	clipboard: ['https://agentos.dev/docs', 'Desktop Actions — Research Notes', 'pacman -Syu'],
+	notifications: [
+		{
+			id: 1,
+			app: 'Software',
+			title: 'Updates are ready',
+			body: '3 application updates can be installed.',
+			time: '2 min',
+			unread: true
+		},
+		{
+			id: 2,
+			app: 'Files',
+			title: 'Archive extracted',
+			body: 'research-assets.zip was extracted to Downloads.',
+			time: '18 min',
+			unread: true
+		},
+		{
+			id: 3,
+			app: 'System',
+			title: 'Welcome to AgentOS',
+			body: 'Press Super to search apps, files and settings.',
+			time: 'Today',
+			unread: false
+		}
+	],
+	installedApps: ['Browser', 'Files', 'Text Editor', 'Terminal', 'Settings'],
+	toast: null,
 	windows: {
-		editor: { open: true, minimized: false, maximized: false, x: 212, y: 116, z: 2 },
-		inspector: { open: true, minimized: false, maximized: false, x: 988, y: 116, z: 3 },
-		files: { open: false, minimized: false, maximized: false, x: 370, y: 180, z: 1 }
+		editor: { open: true, minimized: false, maximized: false, x: 212, y: 116, z: 2, workspace: 1 },
+		inspector: {
+			open: true,
+			minimized: false,
+			maximized: false,
+			x: 988,
+			y: 116,
+			z: 3,
+			workspace: 1
+		},
+		files: { open: false, minimized: false, maximized: false, x: 370, y: 180, z: 1, workspace: 1 },
+		settings: {
+			open: false,
+			minimized: false,
+			maximized: false,
+			x: 420,
+			y: 145,
+			z: 1,
+			workspace: 1
+		},
+		software: {
+			open: false,
+			minimized: false,
+			maximized: false,
+			x: 470,
+			y: 135,
+			z: 1,
+			workspace: 1
+		},
+		terminal: {
+			open: false,
+			minimized: false,
+			maximized: false,
+			x: 330,
+			y: 210,
+			z: 1,
+			workspace: 1
+		}
 	}
 };
 
@@ -214,15 +291,45 @@ export function createOSRuntime() {
 	function focusWindow(name: keyof OSState['windows']) {
 		state.update((current) => {
 			const highest = Math.max(...Object.values(current.windows).map((item) => item.z));
+			const targetWorkspace = current.windows[name].open
+				? current.windows[name].workspace
+				: current.workspace;
 			return {
 				...current,
 				focusedWindow: name,
+				workspace: targetWorkspace,
 				windows: {
 					...current.windows,
-					[name]: { ...current.windows[name], open: true, minimized: false, z: highest + 1 }
+					[name]: {
+						...current.windows[name],
+						open: true,
+						minimized: false,
+						workspace: targetWorkspace,
+						z: highest + 1
+					}
 				}
 			};
 		});
+	}
+
+	function showOverlay(overlay: OverlayName) {
+		state.update((current) => ({
+			...current,
+			overlay: current.overlay === overlay ? null : overlay,
+			menuOpen: false,
+			wifiOpen: false
+		}));
+	}
+
+	function toast(message: string) {
+		state.update((current) => ({ ...current, toast: message }));
+		setTimeout(
+			() =>
+				state.update((current) =>
+					current.toast === message ? { ...current, toast: null } : current
+				),
+			2400
+		);
 	}
 
 	async function execute(command: OSCommand): Promise<string> {
@@ -242,24 +349,58 @@ export function createOSRuntime() {
 				return `Opened ${path}`;
 			}
 			case 'panel.menu':
-				state.update((current) => ({ ...current, menuOpen: !current.menuOpen, wifiOpen: false }));
-				return get(state).menuOpen ? 'Application menu opened' : 'Application menu closed';
+				showOverlay('launcher');
+				return get(state).overlay === 'launcher' ? 'Launcher opened' : 'Launcher closed';
+			case 'panel.overview':
+				showOverlay('overview');
+				return 'Workspace overview toggled';
+			case 'panel.control':
+				showOverlay('control');
+				return 'Control Centre toggled';
+			case 'panel.clipboard':
+				showOverlay('clipboard');
+				return 'Clipboard history toggled';
+			case 'panel.capture':
+				showOverlay('capture');
+				return 'Screen capture opened';
 			case 'panel.network':
-				state.update((current) => ({ ...current, wifiOpen: !current.wifiOpen, menuOpen: false }));
+				state.update((current) => ({
+					...current,
+					wifiOpen: !current.wifiOpen,
+					menuOpen: false,
+					overlay: null
+				}));
 				return get(state).wifiOpen ? 'Network panel opened' : 'Network panel closed';
 			case 'panel.editor':
 			case 'menu.editor.open':
 				focusWindow('editor');
+				state.update((current) => ({ ...current, overlay: null, menuOpen: false }));
 				return 'Text Editor focused';
 			case 'panel.inspector':
 				focusWindow('inspector');
+				state.update((current) => ({ ...current, overlay: null, menuOpen: false }));
 				return 'Inspector focused';
 			case 'panel.files':
 			case 'menu.files.open':
 				focusWindow('files');
+				state.update((current) => ({ ...current, overlay: null, menuOpen: false }));
 				return 'Files focused';
 			case 'menu.terminal.open':
-				return 'Terminal launch simulated';
+				focusWindow('terminal');
+				state.update((current) => ({ ...current, overlay: null }));
+				return 'Terminal opened';
+			case 'menu.settings.open':
+				focusWindow('settings');
+				state.update((current) => ({ ...current, overlay: null }));
+				return 'Settings opened';
+			case 'menu.software.open':
+				focusWindow('software');
+				state.update((current) => ({ ...current, overlay: null }));
+				return 'Software opened';
+			case 'menu.browser.open':
+				state.update((current) => ({ ...current, overlay: null }));
+				toast('Browser launched');
+				return 'Browser launch simulated';
 			case 'panel.sound':
 				state.update((current) => ({
 					...current,
@@ -267,7 +408,77 @@ export function createOSRuntime() {
 				}));
 				return `Volume ${get(state).volume}%`;
 			case 'panel.power':
-				return 'Power menu requested';
+				showOverlay('power');
+				return 'Power menu opened';
+			case 'control.bluetooth.toggle':
+				state.update((current) => ({ ...current, bluetoothEnabled: !current.bluetoothEnabled }));
+				return `Bluetooth ${get(state).bluetoothEnabled ? 'enabled' : 'disabled'}`;
+			case 'control.dnd.toggle':
+				state.update((current) => ({ ...current, doNotDisturb: !current.doNotDisturb }));
+				return `Do Not Disturb ${get(state).doNotDisturb ? 'enabled' : 'disabled'}`;
+			case 'control.theme.toggle':
+				state.update((current) => ({ ...current, darkMode: !current.darkMode }));
+				return `${get(state).darkMode ? 'Dark' : 'Light'} appearance selected`;
+			case 'control.volume':
+				state.update((current) => ({
+					...current,
+					volume: Math.max(0, Math.min(100, Number(input)))
+				}));
+				return `Volume ${get(state).volume}%`;
+			case 'control.brightness':
+				state.update((current) => ({
+					...current,
+					brightness: Math.max(10, Math.min(100, Number(input)))
+				}));
+				return `Brightness ${get(state).brightness}%`;
+			case 'notifications.clear':
+				state.update((current) => ({ ...current, notifications: [] }));
+				return 'Notifications cleared';
+			case 'notifications.dismiss':
+				state.update((current) => ({
+					...current,
+					notifications: current.notifications.filter((item) => item.id !== Number(input))
+				}));
+				return 'Notification dismissed';
+			case 'workspace.switch': {
+				const workspace = Math.max(1, Math.min(4, Number(input)));
+				state.update((current) => ({ ...current, workspace, overlay: null }));
+				return `Switched to workspace ${workspace}`;
+			}
+			case 'workspace.window.move': {
+				const value = input as { window: WindowName; workspace: number };
+				updateWindow(value.window, { workspace: value.workspace });
+				return `Moved ${value.window} to workspace ${value.workspace}`;
+			}
+			case 'clipboard.copy': {
+				const value = String(input ?? '');
+				state.update((current) => ({
+					...current,
+					clipboard: [value, ...current.clipboard.filter((item) => item !== value)].slice(0, 8)
+				}));
+				toast('Copied to clipboard');
+				return 'Clipboard item copied';
+			}
+			case 'capture.save':
+				state.update((current) => ({ ...current, overlay: null }));
+				toast(`${String(input ?? 'Screenshot')} saved to Pictures`);
+				return 'Capture saved';
+			case 'software.toggle': {
+				const app = String(input);
+				state.update((current) => ({
+					...current,
+					installedApps: current.installedApps.includes(app)
+						? current.installedApps.filter((item) => item !== app)
+						: [...current.installedApps, app]
+				}));
+				return `${app} ${get(state).installedApps.includes(app) ? 'installed' : 'removed'}`;
+			}
+			case 'files.path':
+				state.update((current) => ({ ...current, filesPath: String(input) }));
+				return `Opened ${String(input)}`;
+			case 'files.action':
+				toast(String(input));
+				return String(input);
 			case 'wifi.toggle':
 				state.update((current) => ({
 					...current,
@@ -300,10 +511,14 @@ export function createOSRuntime() {
 				}));
 				return `${get(state).inspectorTab} tab selected`;
 			default:
-				if (/^window\.(editor|inspector)\.(minimize|maximize|close)$/.test(command.node)) {
+				if (
+					/^window\.(editor|inspector|files|settings|software|terminal)\.(minimize|maximize|close)$/.test(
+						command.node
+					)
+				) {
 					const [, name, action] = command.node.split('.') as [
 						string,
-						'editor' | 'inspector',
+						WindowName,
 						'minimize' | 'maximize' | 'close'
 					];
 					if (action === 'minimize') updateWindow(name, { minimized: true });
@@ -312,16 +527,8 @@ export function createOSRuntime() {
 					if (action === 'close') updateWindow(name, { open: false });
 					return `${name} ${action}d`;
 				}
-				if (command.node === 'window.files.close') {
-					updateWindow('files', { open: false });
-					return 'Files closed';
-				}
-				if (
-					command.node === 'window.editor' ||
-					command.node === 'window.inspector' ||
-					command.node === 'window.files'
-				) {
-					focusWindow(command.node.split('.')[1] as keyof OSState['windows']);
+				if (/^window\.(editor|inspector|files|settings|software|terminal)$/.test(command.node)) {
+					focusWindow(command.node.split('.')[1] as WindowName);
 					return `${command.node} focused`;
 				}
 				throw new Error(`No handler for ${command.node}`);

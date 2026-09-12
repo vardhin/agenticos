@@ -266,6 +266,251 @@ export const controlGraph: ControlNode[] = [
 		kind: 'action',
 		parentId: 'window.files',
 		description: 'Close Files window'
+	},
+	{
+		id: 'window.files.minimize',
+		label: 'Minimize Files',
+		kind: 'action',
+		parentId: 'window.files',
+		description: 'Minimize Files'
+	},
+	{
+		id: 'window.files.maximize',
+		label: 'Maximize Files',
+		kind: 'action',
+		parentId: 'window.files',
+		description: 'Toggle Files maximization'
+	},
+	{
+		id: 'panel.overview',
+		label: 'Overview',
+		kind: 'toggle',
+		parentId: 'panel',
+		description: 'Show windows and workspaces'
+	},
+	{
+		id: 'panel.control',
+		label: 'Control Centre',
+		kind: 'toggle',
+		parentId: 'panel',
+		description: 'Show quick settings and notifications'
+	},
+	{
+		id: 'panel.clipboard',
+		label: 'Clipboard',
+		kind: 'toggle',
+		parentId: 'panel',
+		description: 'Show clipboard history'
+	},
+	{
+		id: 'panel.capture',
+		label: 'Capture',
+		kind: 'toggle',
+		parentId: 'panel',
+		description: 'Take a screenshot or recording'
+	},
+	{
+		id: 'menu.browser.open',
+		label: 'Open Browser',
+		kind: 'action',
+		parentId: 'menu',
+		description: 'Launch the web browser'
+	},
+	{
+		id: 'menu.settings.open',
+		label: 'Open Settings',
+		kind: 'action',
+		parentId: 'menu',
+		description: 'Open unified system settings'
+	},
+	{
+		id: 'menu.software.open',
+		label: 'Open Software',
+		kind: 'action',
+		parentId: 'menu',
+		description: 'Browse and manage applications'
+	},
+	{
+		id: 'control.bluetooth.toggle',
+		label: 'Bluetooth',
+		kind: 'toggle',
+		parentId: 'panel.control',
+		description: 'Toggle Bluetooth'
+	},
+	{
+		id: 'control.dnd.toggle',
+		label: 'Do Not Disturb',
+		kind: 'toggle',
+		parentId: 'panel.control',
+		description: 'Mute notification popups'
+	},
+	{
+		id: 'control.theme.toggle',
+		label: 'Appearance',
+		kind: 'toggle',
+		parentId: 'panel.control',
+		description: 'Toggle light and dark appearance'
+	},
+	{
+		id: 'control.volume',
+		label: 'Volume',
+		kind: 'input',
+		parentId: 'panel.control',
+		description: 'Set output volume'
+	},
+	{
+		id: 'control.brightness',
+		label: 'Brightness',
+		kind: 'input',
+		parentId: 'panel.control',
+		description: 'Set display brightness'
+	},
+	{
+		id: 'notifications.clear',
+		label: 'Clear notifications',
+		kind: 'action',
+		parentId: 'panel.control',
+		description: 'Clear notification history'
+	},
+	{
+		id: 'notifications.dismiss',
+		label: 'Dismiss notification',
+		kind: 'input',
+		parentId: 'panel.control',
+		description: 'Dismiss one notification'
+	},
+	{
+		id: 'workspace.switch',
+		label: 'Switch workspace',
+		kind: 'input',
+		parentId: 'panel.overview',
+		description: 'Switch to a numbered workspace'
+	},
+	{
+		id: 'workspace.window.move',
+		label: 'Move window',
+		kind: 'input',
+		parentId: 'panel.overview',
+		description: 'Move a window to another workspace'
+	},
+	{
+		id: 'clipboard.copy',
+		label: 'Copy item',
+		kind: 'input',
+		parentId: 'panel.clipboard',
+		description: 'Put an item on the clipboard'
+	},
+	{
+		id: 'capture.save',
+		label: 'Save capture',
+		kind: 'input',
+		parentId: 'panel.capture',
+		description: 'Save a screen capture'
+	},
+	{
+		id: 'software.toggle',
+		label: 'Install or remove app',
+		kind: 'input',
+		parentId: 'window.software',
+		description: 'Toggle application installation'
+	},
+	{
+		id: 'files.path',
+		label: 'Open path',
+		kind: 'input',
+		parentId: 'window.files',
+		description: 'Browse to a folder'
+	},
+	{
+		id: 'files.action',
+		label: 'File action',
+		kind: 'input',
+		parentId: 'window.files',
+		description: 'Perform a simulated file operation'
+	},
+	{
+		id: 'window.settings',
+		label: 'Settings window',
+		kind: 'window',
+		parentId: 'desktop',
+		description: 'Unified persistent system settings'
+	},
+	{
+		id: 'window.settings.minimize',
+		label: 'Minimize Settings',
+		kind: 'action',
+		parentId: 'window.settings',
+		description: 'Minimize Settings'
+	},
+	{
+		id: 'window.settings.maximize',
+		label: 'Maximize Settings',
+		kind: 'action',
+		parentId: 'window.settings',
+		description: 'Toggle Settings maximization'
+	},
+	{
+		id: 'window.settings.close',
+		label: 'Close Settings',
+		kind: 'action',
+		parentId: 'window.settings',
+		description: 'Close Settings'
+	},
+	{
+		id: 'window.software',
+		label: 'Software window',
+		kind: 'window',
+		parentId: 'desktop',
+		description: 'Install, update and remove software'
+	},
+	{
+		id: 'window.software.minimize',
+		label: 'Minimize Software',
+		kind: 'action',
+		parentId: 'window.software',
+		description: 'Minimize Software'
+	},
+	{
+		id: 'window.software.maximize',
+		label: 'Maximize Software',
+		kind: 'action',
+		parentId: 'window.software',
+		description: 'Toggle Software maximization'
+	},
+	{
+		id: 'window.software.close',
+		label: 'Close Software',
+		kind: 'action',
+		parentId: 'window.software',
+		description: 'Close Software'
+	},
+	{
+		id: 'window.terminal',
+		label: 'Terminal window',
+		kind: 'window',
+		parentId: 'desktop',
+		description: 'Terminal session'
+	},
+	{
+		id: 'window.terminal.minimize',
+		label: 'Minimize Terminal',
+		kind: 'action',
+		parentId: 'window.terminal',
+		description: 'Minimize Terminal'
+	},
+	{
+		id: 'window.terminal.maximize',
+		label: 'Maximize Terminal',
+		kind: 'action',
+		parentId: 'window.terminal',
+		description: 'Toggle Terminal maximization'
+	},
+	{
+		id: 'window.terminal.close',
+		label: 'Close Terminal',
+		kind: 'action',
+		parentId: 'window.terminal',
+		description: 'Close Terminal'
 	}
 ];
 

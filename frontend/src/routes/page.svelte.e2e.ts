@@ -20,7 +20,10 @@ test('desktop shell renders and routes human and remote commands', async ({ page
 	await page.getByRole('button', { name: 'PineHouse Good' }).click();
 	await expect(page.getByRole('button', { name: 'PineHouse Connected' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Applications' }).click();
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
 	await expect(page.getByRole('region', { name: 'Application menu' })).toBeVisible();
 	await page.getByRole('textbox', { name: 'Search applications' }).fill('Files');
 	await page.getByRole('button', { name: 'Files Browse files and folders' }).click();
@@ -32,4 +35,44 @@ test('desktop shell renders and routes human and remote commands', async ({ page
 		page.getByTitle('Network panel opened').or(page.getByTitle('Network panel closed')).first()
 	).toBeVisible();
 	expect(consoleErrors).toEqual([]);
+});
+
+test('core desktop surfaces share state and remain keyboard accessible', async ({ page }) => {
+	await page.goto('/');
+	await page.evaluate(() => document.fonts.ready);
+
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	await expect(page.getByRole('region', { name: 'Application menu' })).toBeVisible();
+	await page.getByRole('textbox', { name: 'Search applications' }).fill('settings');
+	await page.getByRole('button', { name: 'Settings Configure your system' }).click();
+	await expect(page.getByRole('region', { name: 'Settings window' })).toBeVisible();
+
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	await page.getByRole('textbox', { name: 'Search applications' }).fill('software');
+	await page.getByRole('button', { name: 'Software Install and update apps' }).click();
+	await expect(page.getByRole('region', { name: 'Software window' })).toBeVisible();
+	await page.getByRole('button', { name: 'Install', exact: true }).first().click();
+	await expect(page.getByRole('button', { name: 'Remove', exact: true }).first()).toBeVisible();
+
+	await page.getByRole('button', { name: 'Overview' }).click();
+	await expect(page.getByLabel('Workspace overview')).toBeVisible();
+	await page.getByRole('button', { name: /2.*windows/ }).click();
+	await expect(page.getByLabel('Workspace overview')).toBeHidden();
+
+	await page.getByRole('button', { name: /Volume/ }).click();
+	await expect(page.getByRole('region', { name: 'Control Centre' })).toBeVisible();
+	await page.getByRole('button', { name: /Do Not Disturb/ }).click();
+	await expect(page.getByRole('button', { name: /Do Not Disturb.*On/ })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Clipboard history' }).click();
+	await expect(page.getByRole('region', { name: 'Clipboard history' })).toBeVisible();
+	await page.getByRole('button', { name: 'Screen capture' }).click();
+	await expect(page.getByRole('region', { name: 'Screen capture' })).toBeVisible();
+	await page.screenshot({ path: 'artifacts/expanded-desktop-1440x1024.png' });
 });
