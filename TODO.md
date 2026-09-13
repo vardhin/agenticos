@@ -92,7 +92,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `clipboard.clear` — confirmation required
 - [ ] `filesystem`
   - [ ] `filesystem.open(path)`
-  - [ ] `filesystem.open_file(file_id)`
+  - [x] `filesystem.open_file(file_id)`
   - [ ] `filesystem.reveal(node_id)`
   - [x] `filesystem.list(path)`
   - [x] `filesystem.search(query)`
@@ -120,7 +120,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `editor.open_file(file_id)`
   - [x] `editor.replace_content(content)`
   - [x] `editor.paste_content(content)`
-  - [ ] `editor.insert(position, content)`
+  - [x] `editor.insert(position, content)`
   - [ ] `editor.select(range)`
   - [ ] `editor.copy_selection`
   - [ ] `editor.cut_selection`
@@ -322,7 +322,7 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [x] 4 actions — Clipboard to named note
   - Prompt: `First take the clipboard content, make a new text file, paste it there, then save it with name "hero".`
   - Expected discovered trajectory: `clipboard.read → editor.new → editor.paste → editor.save_as`
-- [ ] 5 actions — Find and append
+- [x] 5 actions — Find and append
   - Prompt: `Find the file named hero, open it, add the current clipboard content at the end, and save it.`
   - Candidate trajectory: `filesystem.search → filesystem.open → clipboard.read → editor.insert → editor.save`
 - [ ] 6 actions — Organize a note

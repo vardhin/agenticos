@@ -450,6 +450,34 @@ export const controlGraph: ControlNode[] = [
 		description: 'Read the current clipboard item into task working memory'
 	},
 	{
+		id: 'filesystem.search',
+		label: 'Search files',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Search the filesystem and capture the matching file in task working memory'
+	},
+	{
+		id: 'filesystem.open_file',
+		label: 'Open file',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Open a file found by its stable identifier or name'
+	},
+	{
+		id: 'editor.insert',
+		label: 'Insert text',
+		kind: 'input',
+		parentId: 'window.editor',
+		description: 'Insert supplied text at the requested document position'
+	},
+	{
+		id: 'editor.save',
+		label: 'Save active document',
+		kind: 'action',
+		parentId: 'window.editor',
+		description: 'Persist the active editor document'
+	},
+	{
 		id: 'capture.save',
 		label: 'Save capture',
 		kind: 'input',

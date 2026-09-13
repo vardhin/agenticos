@@ -178,6 +178,41 @@ class TaskCompiler:
                 id=f"compiled-{goal_id}",
                 milestones=[Milestone(id=goal_id, goals=[Goal(id=goal_id, predicate=predicate)])],
             )
+        if (
+            "clipboard" in lowered
+            and re.search(r"\bfind\b", lowered)
+            and re.search(r"\b(?:append|add)\b", lowered)
+            and "save" in lowered
+        ):
+            match = re.search(r"\bfile\s+(?:named|called)\s+[\"']?([\w.-]+)[\"']?", source, re.I)
+            name = match.group(1) if match else None
+            if not name:
+                raise CompileError("A filename is required")
+            return TaskAutomaton(
+                id="compiled-find-append",
+                milestones=[
+                    Milestone(
+                        id="file-found",
+                        goals=[Goal(id="found", predicate=Condition(field="filesystem.found_name", value=name))],
+                    ),
+                    Milestone(
+                        id="file-opened",
+                        goals=[Goal(id="opened", predicate=Condition(field="editor.active_file_name", value=name))],
+                    ),
+                    Milestone(
+                        id="clipboard-captured",
+                        goals=[Goal(id="captured", predicate=Condition(field="task.clipboard_captured", value=True))],
+                    ),
+                    Milestone(
+                        id="content-appended",
+                        goals=[Goal(id="appended", predicate=Condition(field="editor.clipboard_appended", value=True))],
+                    ),
+                    Milestone(
+                        id="document-saved",
+                        goals=[Goal(id="saved", predicate=Condition(field="editor.dirty", value=False))],
+                    ),
+                ],
+            )
         if "clipboard" in lowered and re.search(r"\b(?:file|document|note)\b", lowered) and "save" in lowered:
             names = parameters.get("quoted", [])
             name = names[-1] if names else None

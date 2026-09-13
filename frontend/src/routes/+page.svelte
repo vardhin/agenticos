@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
-	import { runClipboardFileTask, type LearnedTaskResult } from '$lib/os/learned-policy';
+	import { runClipboardFileTask, runFindAppendTask, type LearnedTaskResult } from '$lib/os/learned-policy';
 	import { createOSRuntime } from '$lib/os/runtime';
 	import type { OSCommand, WindowName } from '$lib/os/types';
 
@@ -39,6 +39,7 @@
 	let intentResult = $state<AgentTaskResult | LearnedTaskResult | null>(null);
 	let intentError = $state<string | null>(null);
 	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
+	let taskSearchResult: FileEntry | null = null;
 
 	runtime.registerHandler('window.editor.new', async () => {
 		await newDocument(false);
@@ -61,6 +62,43 @@
 		const content = String(input ?? '');
 		editDocument(content);
 		return `Pasted ${content.length} characters into document`;
+	});
+	runtime.registerHandler('filesystem.search', async (input) => {
+		const query = String(input ?? '').trim();
+		if (!query) throw new Error('filesystem.search requires a filename');
+		const matches = await osApi.searchFiles(query);
+		const expected = normalizeTextFileName(query).toLowerCase();
+		taskSearchResult =
+			matches.find((item) => item.name.toLowerCase() === expected) ??
+			matches.find((item) => item.name.toLowerCase() === query.toLowerCase()) ??
+			null;
+		if (!taskSearchResult) throw new Error(`File not found: ${query}`);
+		return `Found ${taskSearchResult.name}`;
+	});
+	runtime.registerHandler('filesystem.open_file', async () => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		await openFile(taskSearchResult);
+		return `Opened ${taskSearchResult.name}`;
+	});
+	runtime.registerHandler('editor.insert', (input) => {
+		const request =
+			typeof input === 'object' && input !== null
+				? (input as { position?: number | 'end'; content?: unknown })
+				: { position: 'end' as const, content: input };
+		const content = String(request.content ?? '');
+		const position =
+			request.position === 'end' || request.position === undefined
+				? $osState.editorText.length
+				: Math.max(0, Math.min($osState.editorText.length, request.position));
+		editDocument(
+			`${$osState.editorText.slice(0, position)}${content}${$osState.editorText.slice(position)}`
+		);
+		return `Appended ${content.length} characters to ${activeFileName}`;
+	});
+	runtime.registerHandler('editor.save', async () => {
+		await saveDocument();
+		if (documentDirty) throw new Error(`Could not save ${activeFileName}`);
+		return `Saved ${activeFileName}`;
 	});
 	runtime.registerHandler('files.create', async (input) => {
 		const value = (input ?? {}) as {
@@ -275,6 +313,13 @@
 		intentResult = null;
 		intentError = null;
 		try {
+			const findAppendResult = await runFindAppendTask(runtime, command);
+			if (findAppendResult) {
+				intentResult = findAppendResult;
+				if (findAppendResult.status === 'failed')
+					intentError = findAppendResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
 			const learnedResult = await runClipboardFileTask(runtime, command);
 			if (learnedResult) {
 				intentResult = learnedResult;

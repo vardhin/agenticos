@@ -81,6 +81,73 @@ test('learned policy completes a clipboard to saved text-file trajectory', async
 		.toEqual(['window.editor.save', 'window.editor.paste', 'window.editor.new', 'clipboard.read']);
 });
 
+test('learned policy finds a file and appends the current clipboard item', async ({
+	page,
+	request
+}) => {
+	const basename = `hero-${Date.now()}`;
+	const created = await request.post('/backend-api/files', {
+		data: {
+			parent_path: 'Documents',
+			name: `${basename}.txt`,
+			kind: 'text',
+			content: 'Opening line: '
+		}
+	});
+	expect(created.ok()).toBeTruthy();
+	const file = await created.json();
+
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Find the file named ${basename}, open it, add the current clipboard content at the end, and save it.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(page.getByRole('region', { name: 'Text Editor window' })).toContainText(
+		`${basename}.txt`
+	);
+	await expect(page.getByRole('textbox', { name: 'Document text' })).toHaveValue(
+		'Opening line: https://agentos.dev/docs'
+	);
+	await expect
+		.poll(async () => {
+			const response = await request.get(`/backend-api/files/${file.id}`, {
+				params: { include_content: true }
+			});
+			return (await response.json()).content;
+		})
+		.toBe('Opening line: https://agentos.dev/docs');
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'filesystem.search',
+				'filesystem.open_file',
+				'clipboard.read',
+				'editor.insert',
+				'editor.save'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 5);
+		})
+		.toEqual([
+			'editor.save',
+			'editor.insert',
+			'clipboard.read',
+			'filesystem.open_file',
+			'filesystem.search'
+		]);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {
@@ -94,7 +161,9 @@ test('desktop shell renders and routes human and remote commands', async ({ page
 		window.dispatchEvent(new CustomEvent('agentos:command', { detail: { node: 'panel.editor' } }))
 	);
 	await page.evaluate(() =>
-		window.dispatchEvent(new CustomEvent('agentos:command', { detail: { node: 'panel.inspector' } }))
+		window.dispatchEvent(
+			new CustomEvent('agentos:command', { detail: { node: 'panel.inspector' } })
+		)
 	);
 	await expect(page.getByRole('region', { name: 'Text Editor window' })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Control Graph Inspector window' })).toBeVisible();
@@ -213,5 +282,7 @@ test('terminal executes commands against the virtual filesystem', async ({ page 
 	await expect(terminal).toContainText('/home/agentos');
 	await input.fill('help');
 	await input.press('Enter');
-	await expect(terminal).toContainText('Commands: help, pwd, ls, cd, cat, touch, mkdir, echo, history, clear');
+	await expect(terminal).toContainText(
+		'Commands: help, pwd, ls, cd, cat, touch, mkdir, echo, history, clear'
+	);
 });

@@ -10,6 +10,17 @@ export const taskActionSpace = [
 ] as const;
 
 type TaskAction = (typeof taskActionSpace)[number];
+const findAppendActionSpace = [
+	'filesystem.search',
+	'filesystem.open_file',
+	'clipboard.read',
+	'editor.insert',
+	'editor.save',
+	'panel.clipboard',
+	'menu.editor.open'
+] as const;
+type FindAppendAction = (typeof findAppendActionSpace)[number];
+type LearnedAction = TaskAction | FindAppendAction;
 type TaskMilestone =
 	| 'clipboard_captured'
 	| 'empty_document_created'
@@ -18,6 +29,11 @@ type TaskMilestone =
 
 export interface ClipboardFileIntent {
 	type: 'clipboard_to_text_file';
+	filename: string;
+}
+
+export interface FindAppendIntent {
+	type: 'find_and_append';
 	filename: string;
 }
 
@@ -36,17 +52,26 @@ interface TrainingState {
 
 export interface LearnedTaskResult {
 	command: string;
-	goal: ClipboardFileIntent;
+	goal: ClipboardFileIntent | FindAppendIntent;
 	route: 'q_learning';
 	training: { episodes: number; states: number; actions: number };
-	plan: Array<{ action: TaskAction }>;
+	plan: Array<{ action: LearnedAction }>;
 	executions: Array<{
-		action: TaskAction;
+		action: LearnedAction;
 		status: 'succeeded' | 'failed';
 		message: string;
 	}>;
 	status: 'succeeded' | 'failed';
 	error: string | null;
+}
+
+interface FindAppendState {
+	progress: number;
+	searched: boolean;
+	opened: boolean;
+	clipboardCaptured: boolean;
+	contentInserted: boolean;
+	saved: boolean;
 }
 
 export interface TaskRuntime {
@@ -257,6 +282,165 @@ export async function runClipboardFileTask(
 		pasted ? 'succeeded' : 'failed',
 		pasted ? null : 'The final editor content does not match the clipboard'
 	);
+}
+
+export function compileFindAppendIntent(command: string): FindAppendIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\bfind\b/i.test(normalized) ||
+		!/\b(?:append|add)\b/i.test(normalized) ||
+		!normalized.toLowerCase().includes('clipboard') ||
+		!/\bsave\b/i.test(normalized)
+	)
+		return null;
+	const filename = normalized.match(/\bfile\s+(?:named|called)\s+["']?([\w.-]+)["']?/i)?.[1];
+	return filename ? { type: 'find_and_append', filename } : null;
+}
+
+function applyFindAppendAction(state: FindAppendState, action: FindAppendAction): FindAppendState {
+	const next = { ...state };
+	if (action === 'filesystem.search') next.searched = true;
+	if (action === 'filesystem.open_file' && state.searched) next.opened = true;
+	if (action === 'clipboard.read' && state.opened) next.clipboardCaptured = true;
+	if (action === 'editor.insert' && state.opened && state.clipboardCaptured)
+		next.contentInserted = true;
+	if (action === 'editor.save' && state.contentInserted) next.saved = true;
+	return next;
+}
+
+function findAppendMilestoneSatisfied(progress: number, state: FindAppendState): boolean {
+	if (progress === 0) return state.searched;
+	if (progress === 1) return state.opened;
+	if (progress === 2) return state.clipboardCaptured;
+	if (progress === 3) return state.contentInserted;
+	return state.saved;
+}
+
+function findAppendTransition(
+	state: FindAppendState,
+	action: FindAppendAction
+): { state: FindAppendState; reward: number } {
+	const next = applyFindAppendAction(state, action);
+	if (!findAppendMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 5 ? 20 : 3 };
+}
+
+function findAppendStateKey(state: FindAppendState): string {
+	return [
+		state.progress,
+		Number(state.searched),
+		Number(state.opened),
+		Number(state.clipboardCaptured),
+		Number(state.contentInserted),
+		Number(state.saved)
+	].join(':');
+}
+
+function trainFindAppendPolicy(episodes = 1600): {
+	actions: FindAppendAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const valuesFor = (state: FindAppendState) => {
+		const key = findAppendStateKey(state);
+		let values = qTable.get(key);
+		if (!values) {
+			values = findAppendActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	const initialState = (): FindAppendState => ({
+		progress: 0,
+		searched: false,
+		opened: false,
+		clipboardCaptured: false,
+		contentInserted: false,
+		saved: false
+	});
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 32 && state.progress !== 5; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * findAppendActionSpace.length)
+					: bestAction(values);
+			const outcome = findAppendTransition(state, findAppendActionSpace[actionIndex]);
+			const future = outcome.state.progress === 5 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: FindAppendAction[] = [];
+	let state = initialState();
+	while (state.progress !== 5) {
+		const action = findAppendActionSpace[bestAction(valuesFor(state))];
+		const outcome = findAppendTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runFindAppendTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileFindAppendIntent(command);
+	if (!goal) return null;
+	const clipboardContent = runtime.snapshot().clipboard[0];
+	if (clipboardContent === undefined) throw new Error('The clipboard is empty');
+	const policy = trainFindAppendPolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	for (const action of policy.actions) {
+		const input =
+			action === 'filesystem.search' || action === 'filesystem.open_file'
+				? goal.filename
+				: action === 'editor.insert'
+					? { position: 'end', content: clipboardContent }
+					: action === 'clipboard.read'
+						? clipboardContent
+						: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildFindAppendResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	return buildFindAppendResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+function buildFindAppendResult(
+	command: string,
+	goal: FindAppendIntent,
+	policy: { actions: FindAppendAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 1600,
+			states: policy.statesVisited,
+			actions: findAppendActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
 }
 
 function buildResult(

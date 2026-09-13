@@ -52,6 +52,27 @@ def test_compiler_emits_semantic_milestones_not_actions() -> None:
     assert "editor.save" not in serialized
 
 
+def test_find_and_append_compiles_to_five_ordered_semantic_milestones() -> None:
+    compiled = TaskCompiler().compile(
+        "Find the file named hero, open it, add the current clipboard content at the end, and save it."
+    )
+
+    assert compiled.automaton is not None
+    assert compiled.automaton.id == "compiled-find-append"
+    assert [item.id for item in compiled.automaton.milestones] == [
+        "file-found",
+        "file-opened",
+        "clipboard-captured",
+        "content-appended",
+        "document-saved",
+    ]
+    assert compiled.automaton.milestones[0].goals[0].predicate.field == "filesystem.found_name"
+    assert compiled.automaton.milestones[0].goals[0].predicate.value == "hero"
+    serialized = str(compiled.automaton.model_dump())
+    assert "filesystem.search" not in serialized
+    assert "editor.insert" not in serialized
+
+
 def test_ambiguous_reference_is_structured() -> None:
     with pytest.raises(AmbiguousReferenceError) as caught:
         TaskCompiler().compile("open that file", {"that file": ["file:1", "file:2"]})
