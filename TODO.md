@@ -6,7 +6,7 @@ Status legend: `[x]` means a usable endpoint or control node already exists; it 
 
 ## 0. Non-negotiable architecture
 
-- [ ] Define one environment contract shared by every domain:
+- [x] Define one environment contract shared by every domain:
   - [x] State variables and observation function
   - [x] Goals and goal-satisfaction predicates
   - [x] Actions with typed arguments
@@ -15,7 +15,7 @@ Status legend: `[x]` means a usable endpoint or control node already exists; it 
   - [x] Cost, latency, risk, reversibility, and confirmation metadata
   - [x] Simulator binding and real UI/OS binding
   - [x] Structured success and failure results
-- [ ] Keep the control boundary strict:
+- [x] Keep the control boundary strict:
   - [x] Compiler emits goals, milestones, parameters, and constraints—not action sequences
   - [x] RL/policies return action proposals—not side effects
   - [x] Planner validates every proposal against current observed state
@@ -28,69 +28,69 @@ Status legend: `[x]` means a usable endpoint or control node already exists; it 
 - [x] Add deterministic seeds, policy versioning, reward configuration, and reproducible training logs.
 - [x] Add maximum-step, timeout, cycle-detection, and cumulative-risk limits.
 - [x] Require confirmation immediately before irreversible or high-risk actions.
-- [ ] Make every task cancelable between actions.
+- [x] Make every task cancelable between actions.
 
 ## 1. Agent-operable action tree
 
 Each leaf below should become a registered action with the uniform contract.
 
-- [ ] `system`
-  - [ ] `system.observe`
-  - [ ] `system.wait`
-  - [ ] `system.cancel_task`
-  - [ ] `system.undo_last`
-  - [ ] `system.redo_last`
+- [x] `system`
+  - [x] `system.observe`
+  - [x] `system.wait`
+  - [x] `system.cancel_task`
+  - [x] `system.undo_last`
+  - [x] `system.redo_last`
   - [x] `system.show_desktop`
-  - [ ] `system.lock`
-  - [ ] `system.logout` — confirmation required
-  - [ ] `system.restart` — confirmation required
-  - [ ] `system.shutdown` — confirmation required
-- [ ] `launcher`
-  - [ ] `launcher.open`
-  - [ ] `launcher.close`
-  - [ ] `launcher.search(query)`
-  - [ ] `launcher.clear_query`
-  - [ ] `launcher.open_result(result_id)`
-  - [ ] `launcher.open_recent(item_id)`
-  - [ ] `launcher.pin(app_id)`
-  - [ ] `launcher.unpin(app_id)`
-- [ ] `application`
-  - [ ] `application.launch(app_id)`
-  - [ ] `application.focus(app_id)`
-  - [ ] `application.quit(app_id)`
-  - [ ] `application.force_quit(app_id)` — confirmation required
-  - [ ] `application.open_recent(app_id, item_id)`
-  - [ ] `application.set_default(mime_type, app_id)`
-- [ ] `window`
-  - [ ] `window.focus(window_id)`
-  - [ ] `window.minimize(window_id)`
-  - [ ] `window.restore(window_id)`
-  - [ ] `window.maximize(window_id)`
-  - [ ] `window.unmaximize(window_id)`
-  - [ ] `window.close(window_id)`
-  - [ ] `window.move(window_id, x, y)`
-  - [ ] `window.resize(window_id, width, height)`
+  - [x] `system.lock`
+  - [x] `system.logout` — confirmation required
+  - [x] `system.restart` — confirmation required
+  - [x] `system.shutdown` — confirmation required
+- [x] `launcher`
+  - [x] `launcher.open`
+  - [x] `launcher.close`
+  - [x] `launcher.search(query)`
+  - [x] `launcher.clear_query`
+  - [x] `launcher.open_result(result_id)`
+  - [x] `launcher.open_recent(item_id)`
+  - [x] `launcher.pin(app_id)`
+  - [x] `launcher.unpin(app_id)`
+- [x] `application`
+  - [x] `application.launch(app_id)`
+  - [x] `application.focus(app_id)`
+  - [x] `application.quit(app_id)`
+  - [x] `application.force_quit(app_id)` — confirmation required
+  - [x] `application.open_recent(app_id, item_id)`
+  - [x] `application.set_default(mime_type, app_id)`
+- [x] `window`
+  - [x] `window.focus(window_id)`
+  - [x] `window.minimize(window_id)`
+  - [x] `window.restore(window_id)`
+  - [x] `window.maximize(window_id)`
+  - [x] `window.unmaximize(window_id)`
+  - [x] `window.close(window_id)`
+  - [x] `window.move(window_id, x, y)`
+  - [x] `window.resize(window_id, width, height)`
   - [x] `window.snap(window_id, side)`
-  - [ ] `window.fullscreen(window_id, enabled)`
-  - [ ] `window.cycle(direction)`
-- [ ] `workspace`
+  - [x] `window.fullscreen(window_id, enabled)`
+  - [x] `window.cycle(direction)`
+- [x] `workspace`
   - [x] `workspace.create`
   - [x] `workspace.switch(index)`
-  - [ ] `workspace.rename(index, name)`
-  - [ ] `workspace.move_window(window_id, index)`
-  - [ ] `workspace.remove(index)`
-  - [ ] `workspace.show_overview`
-- [ ] `clipboard`
+  - [x] `workspace.rename(index, name)`
+  - [x] `workspace.move_window(window_id, index)`
+  - [x] `workspace.remove(index)`
+  - [x] `workspace.show_overview`
+- [x] `clipboard`
   - [x] `clipboard.read_current`
-  - [ ] `clipboard.read_history(index)`
+  - [x] `clipboard.read_history(index)`
   - [x] `clipboard.copy(content)`
-  - [ ] `clipboard.cut(resource_id)`
-  - [ ] `clipboard.paste(target_id)`
-  - [ ] `clipboard.pin(index)`
-  - [ ] `clipboard.unpin(index)`
-  - [ ] `clipboard.delete(index)`
-  - [ ] `clipboard.clear` — confirmation required
-- [ ] `filesystem`
+  - [x] `clipboard.cut(resource_id)`
+  - [x] `clipboard.paste(target_id)`
+  - [x] `clipboard.pin(index)`
+  - [x] `clipboard.unpin(index)`
+  - [x] `clipboard.delete(index)`
+  - [x] `clipboard.clear` — confirmation required
+- [x] `filesystem`
   - [x] `filesystem.open(path)`
   - [x] `filesystem.open_file(file_id)`
   - [x] `filesystem.reveal(node_id)`
@@ -102,69 +102,69 @@ Each leaf below should become a registered action with the uniform contract.
   - [x] `filesystem.write(file_id, content)`
   - [x] `filesystem.rename(node_id, name)`
   - [x] `filesystem.move(node_id, parent)`
-  - [ ] `filesystem.copy(node_id, parent)`
+  - [x] `filesystem.copy(node_id, parent)`
   - [x] `filesystem.trash(node_id)`
   - [x] `filesystem.restore(node_id)`
-  - [ ] `filesystem.delete_permanently(node_id)` — confirmation required
-  - [ ] `filesystem.empty_trash` — confirmation required
+  - [x] `filesystem.delete_permanently(node_id)` — confirmation required
+  - [x] `filesystem.empty_trash` — confirmation required
   - [x] `filesystem.star(node_id, enabled)`
-  - [ ] `filesystem.sort(path, field, direction)`
-  - [ ] `filesystem.filter(path, type)`
+  - [x] `filesystem.sort(path, field, direction)`
+  - [x] `filesystem.filter(path, type)`
   - [x] `filesystem.compress(node_ids, archive_name)`
-  - [ ] `filesystem.extract(archive_id, destination)`
-  - [ ] `filesystem.mount(device_id)`
-  - [ ] `filesystem.unmount(device_id)`
-- [ ] `editor`
+  - [x] `filesystem.extract(archive_id, destination)`
+  - [x] `filesystem.mount(device_id)`
+  - [x] `filesystem.unmount(device_id)`
+- [x] `editor`
   - [x] `editor.open`
   - [x] `editor.new_document`
-  - [ ] `editor.open_file(file_id)`
+  - [x] `editor.open_file(file_id)`
   - [x] `editor.replace_content(content)`
   - [x] `editor.paste_content(content)`
   - [x] `editor.insert(position, content)`
-  - [ ] `editor.select(range)`
-  - [ ] `editor.copy_selection`
-  - [ ] `editor.cut_selection`
-  - [ ] `editor.delete_selection`
-  - [ ] `editor.find(query)`
-  - [ ] `editor.replace(query, replacement)`
+  - [x] `editor.select(range)`
+  - [x] `editor.copy_selection`
+  - [x] `editor.cut_selection`
+  - [x] `editor.delete_selection`
+  - [x] `editor.find(query)`
+  - [x] `editor.replace(query, replacement)`
   - [x] `editor.save`
   - [x] `editor.save_as(name, parent)`
   - [x] `editor.close_document`
-- [ ] `terminal`
+- [x] `terminal`
   - [x] `terminal.open`
   - [x] `terminal.execute(command)`
-  - [ ] `terminal.interrupt`
-  - [ ] `terminal.clear`
-  - [ ] `terminal.change_directory(path)`
-  - [ ] `terminal.read_output(range)`
-  - [ ] `terminal.copy_output(range)`
-- [ ] `browser`
+  - [x] `terminal.interrupt`
+  - [x] `terminal.clear`
+  - [x] `terminal.change_directory(path)`
+  - [x] `terminal.read_output(range)`
+  - [x] `terminal.copy_output(range)`
+- [x] `browser`
   - [x] `browser.open`
   - [x] `browser.navigate(url_or_query)`
-  - [ ] `browser.back`
-  - [ ] `browser.forward`
-  - [ ] `browser.reload`
-  - [ ] `browser.new_tab`
-  - [ ] `browser.close_tab(tab_id)`
-  - [ ] `browser.switch_tab(tab_id)`
-  - [ ] `browser.bookmark(url)`
+  - [x] `browser.back`
+  - [x] `browser.forward`
+  - [x] `browser.reload`
+  - [x] `browser.new_tab`
+  - [x] `browser.close_tab(tab_id)`
+  - [x] `browser.switch_tab(tab_id)`
+  - [x] `browser.bookmark(url)`
   - [x] `browser.download(resource)`
-  - [ ] `browser.find_on_page(query)`
+  - [x] `browser.find_on_page(query)`
   - [x] `browser.copy_url`
-- [ ] `search`
-  - [ ] `search.query(text, domains)`
-  - [ ] `search.filter(type, date, owner)`
-  - [ ] `search.open_result(result_id)`
-  - [ ] `search.reveal_result(result_id)`
-  - [ ] `search.clear`
-- [ ] `notification`
+- [x] `search`
+  - [x] `search.query(text, domains)`
+  - [x] `search.filter(type, date, owner)`
+  - [x] `search.open_result(result_id)`
+  - [x] `search.reveal_result(result_id)`
+  - [x] `search.clear`
+- [x] `notification`
   - [x] `notification.list`
-  - [ ] `notification.open(notification_id)`
+  - [x] `notification.open(notification_id)`
   - [x] `notification.dismiss(notification_id)`
   - [x] `notification.clear_all`
-  - [ ] `notification.snooze(notification_id, duration)`
+  - [x] `notification.snooze(notification_id, duration)`
   - [x] `notification.set_dnd(enabled)`
-- [ ] `network.wifi`
+- [x] `network.wifi`
   - [x] `wifi.observe`
   - [x] `wifi.enable`
   - [x] `wifi.disable`
@@ -173,71 +173,71 @@ Each leaf below should become a registered action with the uniform contract.
   - [x] `wifi.disconnect`
   - [x] `wifi.forget(ssid)` — confirmation required
   - [x] `wifi.test_internet`
-  - [ ] `wifi.measure_latency`
-  - [ ] `wifi.measure_throughput`
-- [ ] `bluetooth`
+  - [x] `wifi.measure_latency`
+  - [x] `wifi.measure_throughput`
+- [x] `bluetooth`
   - [x] `bluetooth.enable`
   - [x] `bluetooth.disable`
-  - [ ] `bluetooth.scan`
-  - [ ] `bluetooth.pair(device_id)` — confirmation required
-  - [ ] `bluetooth.connect(device_id)`
-  - [ ] `bluetooth.disconnect(device_id)`
-  - [ ] `bluetooth.forget(device_id)` — confirmation required
-- [ ] `audio`
+  - [x] `bluetooth.scan`
+  - [x] `bluetooth.pair(device_id)` — confirmation required
+  - [x] `bluetooth.connect(device_id)`
+  - [x] `bluetooth.disconnect(device_id)`
+  - [x] `bluetooth.forget(device_id)` — confirmation required
+- [x] `audio`
   - [x] `audio.set_volume(percent)`
-  - [ ] `audio.adjust_volume(delta)`
-  - [ ] `audio.set_muted(enabled)`
-  - [ ] `audio.select_output(device_id)`
-  - [ ] `audio.select_input(device_id)`
-  - [ ] `audio.set_input_gain(percent)`
-  - [ ] `audio.test_output`
-- [ ] `display`
+  - [x] `audio.adjust_volume(delta)`
+  - [x] `audio.set_muted(enabled)`
+  - [x] `audio.select_output(device_id)`
+  - [x] `audio.select_input(device_id)`
+  - [x] `audio.set_input_gain(percent)`
+  - [x] `audio.test_output`
+- [x] `display`
   - [x] `display.set_brightness(percent)`
-  - [ ] `display.adjust_brightness(delta)`
+  - [x] `display.adjust_brightness(delta)`
   - [x] `display.set_theme(theme)`
-  - [ ] `display.set_night_light(enabled)`
-  - [ ] `display.set_scale(percent)`
-  - [ ] `display.set_resolution(display_id, resolution)`
-  - [ ] `display.arrange(display_id, position)`
-- [ ] `settings`
+  - [x] `display.set_night_light(enabled)`
+  - [x] `display.set_scale(percent)`
+  - [x] `display.set_resolution(display_id, resolution)`
+  - [x] `display.arrange(display_id, position)`
+- [x] `settings`
   - [x] `settings.open`
-  - [ ] `settings.open_section(section_id)`
-  - [ ] `settings.read(key)`
-  - [ ] `settings.set(key, value)`
-  - [ ] `settings.reset(key)` — confirmation required
-- [ ] `software`
+  - [x] `settings.open_section(section_id)`
+  - [x] `settings.read(key)`
+  - [x] `settings.set(key, value)`
+  - [x] `settings.reset(key)` — confirmation required
+- [x] `software`
   - [x] `software.open`
-  - [ ] `software.search(query)`
-  - [ ] `software.show_details(app_id)`
+  - [x] `software.search(query)`
+  - [x] `software.show_details(app_id)`
   - [x] `software.install(app_id)` — confirmation required
   - [x] `software.uninstall(app_id)` — confirmation required
-  - [ ] `software.update(app_id)`
-  - [ ] `software.update_all` — confirmation required
-- [ ] `capture`
+  - [x] `software.update(app_id)`
+  - [x] `software.update_all` — confirmation required
+- [x] `capture`
   - [x] `capture.fullscreen`
-  - [ ] `capture.window(window_id)`
-  - [ ] `capture.region(rect)`
-  - [ ] `capture.record_start(target)`
-  - [ ] `capture.record_stop`
+  - [x] `capture.window(window_id)`
+  - [x] `capture.region(rect)`
+  - [x] `capture.record_start(target)`
+  - [x] `capture.record_stop`
   - [x] `capture.save(name, parent)`
-  - [ ] `capture.copy_to_clipboard`
-- [ ] `open_share`
-  - [ ] `open_with.open(node_id, app_id)`
-  - [ ] `share.copy_link(node_id)`
-  - [ ] `share.send(node_id, target)` — confirmation required
+  - [x] `capture.copy_to_clipboard`
+- [x] `open_share`
+  - [x] `open_with.open(node_id, app_id)`
+  - [x] `share.copy_link(node_id)`
+  - [x] `share.send(node_id, target)` — confirmation required
 
 ## 2. Factored environment state
 
-- [ ] Add stable IDs for apps, windows, workspaces, files, devices, networks, tabs, and notifications.
+- [x] Add stable IDs for apps, windows, workspaces, files, devices, networks, tabs, and notifications.
 - [x] Add task working memory for captured values without copying entire OS state into the policy.
 - [ ] Model at minimum:
-  - [ ] Focused app/window and open/minimized/maximized state
+  - [x] Focused app/window and open/minimized/maximized state
   - [ ] Current workspace and window membership
-  - [ ] Current path, selection, and active file
-  - [ ] Active editor document, dirty flag, and persisted filename
-  - [ ] Clipboard current item and history metadata
-  - [ ] Network, Bluetooth, audio, display, theme, and DND state
-  - [ ] Running task, task progress, pending confirmation, and last failure
+  - [x] Current path, selection, and active file
+  - [x] Active editor document, dirty flag, and persisted filename
+  - [x] Clipboard current item and history metadata
+  - [x] Network, Bluetooth, audio, display, theme, and DND state
+  - [x] Running task, task progress, pending confirmation, and last failure
 - [x] Hash/canonicalize factored states for tabular policies.
 - [x] Add partial-observation markers instead of treating unknown values as false.
 - [x] Record before/after state diffs for every action.
@@ -245,7 +245,7 @@ Each leaf below should become a registered action with the uniform contract.
 ## 3. Task compiler and ordered goals
 
 - [ ] Replace feature-specific regex entry points with a small compositional grammar.
-- [ ] Support operators:
+- [x] Support operators:
   - [x] `SEQUENCE(A, B, ...)`
   - [x] `AND(A, B, ...)`
   - [x] `OR(A, B, ...)`
@@ -274,7 +274,7 @@ Each leaf below should become a registered action with the uniform contract.
 - [x] Compare Q-learning against BFS/A* on deterministic tasks.
 - [x] Add stochastic action outcomes and compare Q-learning against deterministic planning.
 - [ ] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
-- [ ] Add recovery actions and re-plan after live state divergence.
+- [x] Add recovery actions and re-plan after live state divergence.
 - [ ] Later: evaluate DQN only when the factored state no longer fits tabular learning.
 
 ## 5. Minimal OS user interfaces
@@ -353,14 +353,14 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 
 - [ ] Unit-test every action precondition, effect, and goal predicate.
 - [ ] Contract-test simulator and live binding for equivalent state transitions.
-- [ ] Test task compilation independently from policy training.
-- [ ] Assert learned trajectories without placing expected trajectories in the compiler.
+- [x] Test task compilation independently from policy training.
+- [x] Assert learned trajectories without placing expected trajectories in the compiler.
 - [ ] Add property tests for invalid action ordering, idempotency, and bounded execution.
 - [ ] Add injected failures: timeout, stale state, missing file, permission denied, disappearing network, duplicate filename.
 - [ ] Add safety tests for confirmation, cancellation, maximum risk, and rollback.
 - [ ] Run every benchmark from multiple initial states.
 - [ ] Track:
-  - [ ] Success rate
+  - [x] Success rate
   - [ ] Training time and inference time
   - [ ] Environment steps and unnecessary actions
   - [ ] Recovery rate
@@ -372,21 +372,21 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 ## 8. Delivery phases
 
 - [ ] Phase 1 — Generalize the current clipboard prototype
-  - [ ] Move action effects into the shared registry
-  - [ ] Generate the training simulator from action metadata
+  - [x] Move action effects into the shared registry
+  - [x] Generate the training simulator from action metadata
   - [ ] Add task/policy inspection to the UI
   - [ ] Persist and reuse the learned Q-table
-- [ ] Phase 2 — Complete Files + Editor + Clipboard breadth
-  - [ ] Implement all missing actions required by the 5–7 action benchmarks
-  - [ ] Add semantic observers and end-to-end verification
-- [ ] Phase 3 — Windows + Workspaces + Search
-  - [ ] Implement multi-window state and the 8-action workspace benchmark
-- [ ] Phase 4 — Browser + Downloads + Archives
-  - [ ] Complete the 9-action benchmark
+- [x] Phase 2 — Complete Files + Editor + Clipboard breadth
+  - [x] Implement all missing actions required by the 5–7 action benchmarks
+  - [x] Add semantic observers and end-to-end verification
+- [x] Phase 3 — Windows + Workspaces + Search
+  - [x] Implement multi-window state and the 8-action workspace benchmark
+- [x] Phase 4 — Browser + Downloads + Archives
+  - [x] Complete the 9-action benchmark
 - [x] Phase 5 — Ten-action cross-domain policies
   - [x] Complete all deterministic ten-action benchmarks
   - [x] Compare learned policies with BFS/A*
-- [ ] Phase 6 — Uncertainty and recovery
+- [x] Phase 6 — Uncertainty and recovery
   - [x] Add stochastic simulators, failure observations, and recovery rewards
   - [x] Complete the ten-action recovery benchmark
 - [ ] Phase 7 — Minimal OS polish
@@ -401,7 +401,7 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [ ] At least three ten-action tasks work from multiple initial states.
 - [x] At least one ten-action task recovers from injected stochastic failures.
 - [ ] No policy or specialist directly mutates the environment.
-- [ ] Training never runs against destructive live actions.
+- [x] Training never runs against destructive live actions.
 - [ ] Every executed action is logged, verified, cancelable, and bounded by safety policy.
 - [ ] Deterministic tasks have BFS/A* baselines and RL is justified by measured uncertainty or reuse.
-- [ ] Routine learned-policy inference completes locally without an LLM call.
+- [x] Routine learned-policy inference completes locally without an LLM call.

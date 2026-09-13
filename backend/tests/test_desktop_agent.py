@@ -1,8 +1,10 @@
 import asyncio
+from collections import Counter
 
 import httpx
 
 from backend.app import app, desktop_environment
+from backend.desktop import desktop_initial_fields
 
 
 RECOVERY_PROMPT = (
@@ -17,6 +19,66 @@ SETTINGS_EVIDENCE_PROMPT = (
     "Turn on dark mode, set brightness to 60%, enable Do Not Disturb, take a screenshot, "
     "save it as setup, open Files, find setup, move it to Pictures, star it, and return to the desktop."
 )
+
+
+def test_desktop_action_api_exposes_the_complete_registered_tree() -> None:
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/actions")
+            assert response.status_code == 200
+            payload = response.json()
+            actions = payload["items"]
+
+            assert payload["environment_version"] == "agentos-desktop-v1"
+            assert len(actions) == 172
+            assert len({item["id"] for item in actions}) == len(actions)
+            assert Counter(item["id"].split(".")[0] for item in actions) == {
+                "application": 6,
+                "audio": 7,
+                "bluetooth": 7,
+                "browser": 12,
+                "capture": 7,
+                "clipboard": 9,
+                "display": 7,
+                "editor": 15,
+                "filesystem": 23,
+                "launcher": 8,
+                "notification": 6,
+                "open_with": 1,
+                "search": 5,
+                "settings": 5,
+                "share": 2,
+                "software": 7,
+                "system": 11,
+                "terminal": 7,
+                "wifi": 10,
+                "window": 11,
+                "workspace": 6,
+            }
+            assert all(item["binding"]["simulator"] == "generated" for item in actions)
+            assert all(item["binding"]["live"] == "frontend-runtime" for item in actions)
+            assert all(
+                {effect["field"] for effect in item["effects"]}
+                <= set(item["affected_fields"])
+                for item in actions
+            )
+
+    asyncio.run(scenario())
+
+
+def test_desktop_observation_has_stable_ids_for_addressable_resources() -> None:
+    fields = desktop_initial_fields()
+
+    assert fields["application"]["ids"]
+    assert fields["window"]["ids"]
+    assert fields["workspace"]["ids"]
+    assert fields["filesystem"]["ids"]
+    assert fields["bluetooth"]["device_ids"]
+    assert fields["wifi"]["ids"]
+    assert fields["browser"]["tab_ids"]
+    assert fields["notification"]["ids"]
+    assert fields["wifi"]["id_by_ssid"]["StudioNet"] == "network:studio-net"
 
 
 def test_desktop_agent_endpoint_trains_executes_and_reports_recovery() -> None:

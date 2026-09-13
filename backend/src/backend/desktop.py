@@ -161,6 +161,12 @@ def desktop_initial_fields() -> dict[str, JsonValue]:
             "dnd": False,
         },
         "wifi": {
+            "ids": ["network:studio-net", "network:pine-house", "network:guest"],
+            "id_by_ssid": {
+                "StudioNet": "network:studio-net",
+                "PineHouse": "network:pine-house",
+                "Guest": "network:guest",
+            },
             "enabled": True,
             "connected": False,
             "ssid": None,
