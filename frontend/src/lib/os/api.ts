@@ -26,21 +26,66 @@ export interface WifiObservedState {
 	internet_available: boolean;
 }
 
+export interface DesktopObservedState {
+	environment_version: string;
+	revision: number;
+	fields: {
+		wifi: {
+			enabled: boolean;
+			ssid: string | null;
+		};
+		task: {
+			last_failure: {
+				action: string;
+				code: string;
+				recoverable: boolean;
+			} | null;
+		};
+		[domain: string]: unknown;
+	};
+	unknown_fields: string[];
+}
+
+export type AgentObservedState = WifiObservedState | DesktopObservedState;
+
 export interface AgentTaskResult {
 	command: string;
-	goal: { type: 'wifi_enabled' | 'wifi_disabled' | 'connected' | 'disconnected'; ssid: string | null };
-	route: 'deterministic';
+	goal:
+		| {
+				type: 'wifi_enabled' | 'wifi_disabled' | 'connected' | 'disconnected';
+				ssid: string | null;
+		  }
+		| { id: string; milestones: unknown[]; constraints: Record<string, unknown> };
+	route: 'deterministic' | 'q_learning';
 	plan: Array<{ action: string; args: Record<string, unknown> }>;
 	executions: Array<{
 		action: string;
 		args: Record<string, unknown>;
-		status: 'succeeded' | 'failed';
+		status: 'succeeded' | 'failed' | 'cancelled' | 'confirmation_required';
 		message: string;
-		observed_state: WifiObservedState;
+		observed_state: AgentObservedState;
 	}>;
-	status: 'succeeded' | 'failed';
-	final_state: WifiObservedState;
+	status: 'succeeded' | 'failed' | 'cancelled' | 'confirmation_required';
+	final_state: AgentObservedState;
 	error: string | null;
+	training?: {
+		policy_version: string;
+		cache_key: string;
+		episodes: number;
+		states: number;
+		action_space: number;
+		success_rate: number;
+		recent_traces: unknown[];
+	};
+	baselines?: {
+		bfs: { steps: number | null; duration_ms: number };
+		astar: { steps: number | null; duration_ms: number };
+	};
+	recovery?: {
+		injected_failures: Record<string, number>;
+		observed_failures: number;
+		replans: number;
+	};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

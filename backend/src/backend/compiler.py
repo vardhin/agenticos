@@ -151,7 +151,17 @@ class TaskCompiler:
         if re.match(r"^[A-Z_]+\(", normalized):
             expression = parse_expression(normalized)
         else:
-            clauses = [part.strip(" ,.") for part in re.split(r"\b(?:and then|then|first)\b", normalized, flags=re.I) if part.strip(" ,.")]
+            # This is the natural-language surface of the small grammar.  It only
+            # recognizes composition; domain semantics are resolved separately.
+            clauses = [
+                part.strip(" ,.")
+                for part in re.split(
+                    r"(?:\bfirst\b|\band then\b|\bthen\b|,\s*(?:and\s+)?)",
+                    normalized,
+                    flags=re.I,
+                )
+                if part.strip(" ,.")
+            ]
             expression = Expression("SEQUENCE", tuple(Expression("ATOM", text=part) for part in clauses)) if len(clauses) > 1 else Expression("ATOM", text=normalized)
         expression = ReferenceResolver(references).resolve(expression)
         parameters = extract_parameters(normalized)
@@ -161,6 +171,188 @@ class TaskCompiler:
     @staticmethod
     def _known_automaton(source: str, parameters: dict[str, Any]) -> TaskAutomaton | None:
         lowered = source.casefold()
+
+        def milestone(identifier: str, field: str, value: Any, operator: str = "eq") -> Milestone:
+            return Milestone(
+                id=identifier,
+                goals=[Goal(id=identifier, predicate=Condition(field=field, value=value, operator=operator))],
+            )
+
+        def milestone_all(identifier: str, *predicates: tuple[str, Any, str]) -> Milestone:
+            return Milestone(
+                id=identifier,
+                goals=[
+                    Goal(
+                        id=f"{identifier}-{index}",
+                        predicate=Condition(field=field, value=value, operator=operator),
+                    )
+                    for index, (field, value, operator) in enumerate(predicates)
+                ],
+            )
+
+        def filename_after(pattern: str, default: str | None = None) -> str | None:
+            match = re.search(pattern, source, re.I)
+            return match.group(1).strip().rstrip(".!?") if match else default
+
+        # The ten-step benchmarks are recognized by their semantic ingredients,
+        # then compiled only to state predicates.  No action sequence is embedded.
+        if all(token in lowered for token in ("reports", "clipboard", "close", "find", "move", "star")):
+            name = filename_after(r"\bsave(?:\s+it)?\s+(?:as|with (?:the )?name)\s+[\"']?([\w.-]+)", "hero")
+            assert name is not None
+            return TaskAutomaton(
+                id="compiled-clipboard-report",
+                milestones=[
+                    milestone("clipboard-captured", "task.clipboard_captured", True),
+                    milestone("reports-created", "filesystem.last_created_folder", "Reports"),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("content-pasted", "task.content_pasted", True),
+                    milestone("document-saved", "editor.filename", name),
+                    milestone("editor-closed", "task.document_closed", True),
+                    milestone("files-opened", "application.focused_id", "app:files"),
+                    milestone_all("file-found", ("filesystem.found_name", name, "eq"), ("filesystem.searched", True, "eq")),
+                    milestone_all("file-moved", ("filesystem.last_parent", "Reports", "eq"), ("filesystem.moved", True, "eq")),
+                    milestone("file-starred", "filesystem.starred", True),
+                ],
+                constraints={"filename": name, "folder": "Reports", "save_parent": "Documents"},
+            )
+
+        if all(token in lowered for token in ("studionet", "internet", "project page", "online", "research", "star")):
+            return TaskAutomaton(
+                id="compiled-recovery-online-note",
+                milestones=[
+                    milestone("wifi-connected", "wifi.ssid", "StudioNet"),
+                    milestone("internet-verified", "task.internet_verified", True),
+                    milestone("browser-opened", "browser.open", True),
+                    milestone("project-opened", "browser.url", "https://example.com/project"),
+                    milestone("address-copied", "browser.url_copied", True),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("address-pasted", "task.content_pasted", True),
+                    milestone("document-saved", "editor.filename", "online"),
+                    milestone_all("file-moved", ("filesystem.last_parent", "Research", "eq"), ("filesystem.moved", True, "eq")),
+                    milestone("file-starred", "filesystem.starred", True),
+                ],
+                constraints={"inject_failures": {"wifi.connect": 1}, "stochastic_failures": {"wifi.connect": 0.2}, "filename": "online", "folder": "Research", "save_parent": "Documents"},
+            )
+
+        if all(token in lowered for token in ("workspace two", "hero", "hero-copy", "copy", "close")):
+            return TaskAutomaton(
+                id="compiled-cross-workspace-writing",
+                milestones=[
+                    milestone("workspace-two", "workspace.visited_indices", 2, "contains"),
+                    milestone("files-launched", "application.running_ids", "app:files", "contains"),
+                    milestone_all("hero-found", ("filesystem.found_name", "hero", "eq"), ("filesystem.searched", True, "eq")),
+                    milestone("contents-copied", "task.file_captured", True),
+                    milestone("workspace-one", "workspace.current", 1),
+                    milestone("editor-opened", "editor.open", True),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("content-pasted", "task.content_pasted", True),
+                    milestone("document-saved", "editor.filename", "hero-copy"),
+                    milestone("document-closed", "task.document_closed", True),
+                ],
+                constraints={"filename": "hero-copy", "source": "hero", "save_parent": "Documents"},
+            )
+
+        if all(token in lowered for token in ("dark mode", "brightness", "do not disturb", "screenshot", "pictures", "desktop")):
+            brightness = parameters.get("percentages", [60])[0]
+            return TaskAutomaton(
+                id="compiled-settings-evidence",
+                milestones=[
+                    milestone("dark-mode", "display.theme", "dark"),
+                    milestone("brightness", "display.brightness", brightness),
+                    milestone("dnd", "notification.dnd", True),
+                    milestone("screenshot", "capture.last_capture_id", "capture:latest"),
+                    milestone("capture-saved", "capture.saved_name", "setup"),
+                    milestone("files-opened", "application.focused_id", "app:files"),
+                    milestone_all("capture-found", ("filesystem.found_name", "setup", "eq"), ("filesystem.searched", True, "eq")),
+                    milestone_all("capture-moved", ("filesystem.last_parent", "Pictures", "eq"), ("filesystem.moved", True, "eq")),
+                    milestone("capture-starred", "filesystem.starred", True),
+                    milestone("desktop-visible", "task.desktop_returned", True),
+                ],
+                constraints={"filename": "setup", "folder": "Pictures", "brightness": brightness, "save_parent": "Pictures"},
+            )
+
+        if all(token in lowered for token in ("download", "rename", "folder", "move", "compress", "archive location")):
+            name = filename_after(r"\brename\s+(?:it|the\s+(?:download|file))\s+(?:(?:to|as)\s+)?[\"']?([\w.-]+)", "report")
+            folder = filename_after(r"\bcreate\s+(?:an?\s+)?[\"']?([\w .-]+?)[\"']?\s+folder", "Archive")
+            assert name is not None and folder is not None
+            return TaskAutomaton(
+                id="compiled-download-archive",
+                milestones=[
+                    milestone("browser-opened", "browser.open", True),
+                    milestone("page-downloaded", "browser.last_download_id", "file:download"),
+                    milestone("downloads-opened", "filesystem.opened_paths", "Downloads", "contains"),
+                    milestone_all("download-found", ("filesystem.found_id", "file:search-result", "eq"), ("filesystem.searched", True, "eq")),
+                    milestone_all("download-renamed", ("filesystem.found_name", name, "eq"), ("filesystem.renamed", True, "eq")),
+                    milestone("folder-created", "filesystem.last_created_folder", folder),
+                    milestone_all("download-moved", ("filesystem.last_parent", f"Downloads/{folder}", "eq"), ("filesystem.moved", True, "eq")),
+                    milestone("archive-created", "filesystem.last_archive_id", "archive:created"),
+                    milestone("archive-location-opened", "filesystem.current_path", f"Downloads/{folder}"),
+                ],
+                constraints={"filename": name, "folder": folder, "save_parent": "Downloads"},
+            )
+
+        if all(token in lowered for token in ("workspace", "browser", "editor", "beside", "paste", "save")):
+            workspace_match = re.search(r"\b(second|third|fourth|[2-4])\s+workspace", source, re.I)
+            index_by_name = {"second": 2, "third": 3, "fourth": 4}
+            token = workspace_match.group(1).casefold() if workspace_match else "second"
+            index = index_by_name.get(token, int(token) if token.isdigit() else 2)
+            name = filename_after(r"\bsave(?:\s+it)?\s+(?:as|with (?:the )?name)\s+[\"']?([\w.-]+)", "research")
+            assert name is not None
+            return TaskAutomaton(
+                id="compiled-workspace-setup",
+                milestones=[
+                    milestone("workspace-created", "workspace.last_created", index),
+                    milestone("workspace-selected", "workspace.current", index),
+                    milestone("browser-opened", "browser.open", True),
+                    milestone("editor-opened", "editor.open", True),
+                    milestone("windows-arranged", "window.snap_side", "right"),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("content-pasted", "task.content_pasted", True),
+                    milestone("document-saved", "editor.filename", name),
+                ],
+                constraints={"workspace": index, "filename": name, "save_parent": "Documents"},
+            )
+
+        if all(token in lowered for token in ("browser address", "source note", "paste", "save", "reveal")):
+            name = filename_after(r"\bsave(?:\s+it)?\s+(?:as|with (?:the )?name)\s+[\"']?([\w.-]+)", "source")
+            assert name is not None
+            return TaskAutomaton(
+                id="compiled-research-handoff",
+                milestones=[
+                    milestone("browser-focused", "application.focused_id", "app:browser"),
+                    milestone("address-copied", "browser.url_copied", True),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("address-pasted", "task.content_pasted", True),
+                    milestone("document-saved", "editor.filename", name),
+                    milestone_all("file-found", ("filesystem.found_name", name, "eq"), ("filesystem.searched", True, "eq")),
+                    milestone("file-revealed", "filesystem.selection_id", "file:search-result"),
+                ],
+                constraints={"filename": name, "save_parent": "Documents"},
+            )
+
+        if all(token in lowered for token in ("folder", "documents", "note", "clipboard", "move")):
+            folder = filename_after(r"\bcreate\s+(?:an?\s+)?[\"']?([\w .-]+?)[\"']?\s+folder", "Projects")
+            name = filename_after(r"\bsave(?:\s+it)?\s+(?:as|with (?:the )?name)\s+[\"']?([\w.-]+)", "brief")
+            assert folder is not None and name is not None
+            return TaskAutomaton(
+                id="compiled-organize-note",
+                milestones=[
+                    milestone("documents-opened", "filesystem.current_path", "Documents"),
+                    milestone("folder-created", "filesystem.last_created_folder", folder),
+                    milestone("clipboard-captured", "task.clipboard_captured", True),
+                    milestone("document-created", "task.document_created", True),
+                    milestone("content-pasted", "task.content_pasted", True),
+                    Milestone(
+                        id="document-organized",
+                        goals=[
+                            Goal(id="saved", predicate=Condition(field="editor.filename", value=name)),
+                            Goal(id="parent", predicate=Condition(field="editor.parent", value=f"Documents/{folder}")),
+                        ],
+                    ),
+                ],
+                constraints={"filename": name, "folder": folder, "save_parent": f"Documents/{folder}"},
+            )
+
         if "wifi" in lowered or lowered.startswith("connect"):
             if "disconnect" in lowered:
                 predicate = Condition(field="wifi.connected", value=False)

@@ -20,6 +20,7 @@ export interface WindowState {
 	open: boolean;
 	minimized: boolean;
 	maximized: boolean;
+	snap: 'left' | 'right' | null;
 	x: number;
 	y: number;
 	z: number;
@@ -27,13 +28,7 @@ export interface WindowState {
 }
 
 export type WindowName =
-	| 'editor'
-	| 'inspector'
-	| 'files'
-	| 'settings'
-	| 'software'
-	| 'terminal'
-	| 'browser';
+	'editor' | 'inspector' | 'files' | 'settings' | 'software' | 'terminal' | 'browser';
 export type OverlayName =
 	'launcher' | 'overview' | 'control' | 'clipboard' | 'capture' | 'power' | null;
 
@@ -53,6 +48,7 @@ export interface OSState {
 	wifiOpen: boolean;
 	overlay: OverlayName;
 	workspace: number;
+	workspaceCount: number;
 	wifiEnabled: boolean;
 	bluetoothEnabled: boolean;
 	doNotDisturb: boolean;

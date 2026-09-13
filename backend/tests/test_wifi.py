@@ -2,7 +2,7 @@ import asyncio
 
 import httpx
 
-from backend.app import app, wifi_adapter
+from backend.app import app, desktop_environment, wifi_adapter
 
 
 def test_wifi_goal_is_idempotent() -> None:
@@ -141,15 +141,18 @@ def test_unsupported_command_stops_before_execution() -> None:
 
 def test_uniform_registry_state_compile_and_execute_endpoints() -> None:
     wifi_adapter.reset()
+    desktop_environment.reset()
 
     async def scenario() -> None:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             actions = (await client.get("/api/actions")).json()
-            assert actions["environment_version"] == "agentos-wifi-v2"
+            assert actions["environment_version"] == "agentos-desktop-v1"
             assert len(actions["semantics_version"]) == 16
             assert "wifi.enable" in [item["id"] for item in actions["items"]]
 
+            disabled = await client.post("/api/actions/wifi.disable/execute", json={})
+            assert disabled.status_code == 200
             observed = (await client.get("/api/environment/state")).json()
             assert observed["fields"]["wifi"]["enabled"] is False
             assert len(observed["state_hash"]) == 64

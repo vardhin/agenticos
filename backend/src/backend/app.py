@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
@@ -12,7 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .database import Database
+from .desktop import DesktopEnvironment, build_desktop_registry
+from .environment import Doer, ExecutionEngine, ExecutionLimits, TaskController
 from .filesystem import VirtualFilesystem
+from .planning import AdaptivePolicy, PolicyCache, QLearner, TrainingConfig, search_plan
 from .schemas import (
     ActionExecuteRequest,
     CommandCreate,
@@ -31,7 +35,6 @@ from .wifi import (
     IntentError,
     SimulatedWifiAdapter,
     TaskRequest,
-    TaskResult,
     WifiActionId,
     WifiOrchestrator,
     WifiTarget,
@@ -44,6 +47,12 @@ command_subscribers: set[asyncio.Queue[str]] = set()
 wifi_adapter = SimulatedWifiAdapter()
 wifi_orchestrator = WifiOrchestrator(wifi_adapter)
 task_compiler = TaskCompiler()
+desktop_registry = build_desktop_registry()
+desktop_environment = DesktopEnvironment(desktop_registry)
+desktop_doer = Doer(desktop_registry, desktop_environment)
+desktop_tasks = TaskController()
+policy_cache = PolicyCache()
+trained_policies: dict[str, Any] = {}
 
 
 @asynccontextmanager
@@ -105,7 +114,7 @@ async def get_wifi_actions():
 
 @app.get("/api/actions", tags=["agent"])
 async def get_actions():
-    registry = wifi_orchestrator.doer.registry
+    registry = desktop_registry
     return {
         "environment_version": registry.environment_version,
         "semantics_version": registry.semantics_version,
@@ -115,7 +124,13 @@ async def get_actions():
 
 @app.get("/api/environment/state", tags=["agent"])
 async def get_environment_state():
-    state = wifi_adapter.observe_environment()
+    state = desktop_environment.observe()
+    return {**state.model_dump(mode="json"), "state_hash": state.state_hash()}
+
+
+@app.get("/api/desktop/state", tags=["agent"])
+async def get_desktop_environment_state():
+    state = desktop_environment.observe()
     return {**state.model_dump(mode="json"), "state_hash": state.state_hash()}
 
 
@@ -141,7 +156,7 @@ async def compile_agent_task(value: CompileRequest):
 
 @app.post("/api/actions/{action_id}/execute", tags=["agent"])
 async def execute_registered_action(action_id: str, value: ActionExecuteRequest):
-    result = wifi_orchestrator.doer.generic.execute(
+    result = desktop_doer.execute(
         EnvironmentProposal(action=action_id, args=value.args, confirmed=value.confirmed)
     )
     if result.status in {"failed", "confirmation_required"}:
@@ -198,12 +213,88 @@ async def test_wifi_internet():
     return execute_wifi_action(ActionProposal(action=WifiActionId.TEST_INTERNET))
 
 
-@app.post("/api/agent/tasks", response_model=TaskResult, tags=["agent"])
+@app.post("/api/agent/tasks", tags=["agent"])
 async def run_agent_task(task: TaskRequest):
+    compiled = task_compiler.compile(task.command)
+    if compiled.automaton is not None and not compiled.automaton.id.startswith("compiled-wifi-"):
+        automaton = compiled.automaton
+        desktop_doer.execute(EnvironmentProposal(action="system.begin_task", args={"task_id": automaton.id}))
+        initial = desktop_environment.observe().fields
+
+        started = time.monotonic()
+        bfs = search_plan(desktop_registry, automaton, initial, algorithm="bfs", max_steps=30)
+        bfs_ms = round((time.monotonic() - started) * 1000, 3)
+        started = time.monotonic()
+        astar = search_plan(desktop_registry, automaton, initial, algorithm="astar", max_steps=30)
+        astar_ms = round((time.monotonic() - started) * 1000, 3)
+
+        learner = QLearner(desktop_registry, policy_cache)
+        stochastic_failures = automaton.constraints.get("stochastic_failures", {})
+        training_episodes = 600 if stochastic_failures else 220
+        trained = learner.train(
+            automaton,
+            initial,
+            TrainingConfig(episodes=training_episodes, max_steps=40),
+        )
+        trained_policies[trained.cache_key] = trained
+        adaptive = AdaptivePolicy(desktop_registry, trained)
+        failures = automaton.constraints.get("inject_failures", {})
+        desktop_environment.inject_failures(failures if isinstance(failures, dict) else {})
+        result = ExecutionEngine(desktop_registry, desktop_doer, adaptive, desktop_tasks).run(
+            automaton,
+            ExecutionLimits(max_steps=40, timeout_seconds=30, max_state_visits=5),
+        )
+        return {
+            "command": task.command,
+            "goal": automaton.model_dump(mode="json"),
+            "route": "q_learning",
+            "plan": [
+                {"action": item.action, "args": item.args}
+                for item in result.executions
+                if item.status == "succeeded"
+            ],
+            "executions": [item.model_dump(mode="json") for item in result.executions],
+            "status": result.status,
+            "final_state": result.final_state.model_dump(mode="json"),
+            "error": result.error,
+            "training": {
+                "policy_version": trained.version,
+                "cache_key": trained.cache_key,
+                "episodes": len(trained.traces),
+                "states": len(trained.q_table),
+                "action_space": len(trained.action_space),
+                "success_rate": sum(trace.succeeded for trace in trained.traces) / len(trained.traces),
+                "recent_traces": [trace.model_dump(mode="json") for trace in trained.traces[-10:]],
+            },
+            "baselines": {
+                "bfs": {"steps": len(bfs) if bfs else None, "duration_ms": bfs_ms},
+                "astar": {"steps": len(astar) if astar else None, "duration_ms": astar_ms},
+            },
+            "recovery": {
+                "injected_failures": failures,
+                "observed_failures": sum(item.status == "failed" for item in result.executions),
+                "replans": adaptive.replans,
+            },
+        }
     try:
         return wifi_orchestrator.run(task.command)
     except IntentError as exc:
         raise HTTPException(422, detail={"message": str(exc), "route": "unsupported"}) from exc
+
+
+@app.post("/api/agent/tasks/{task_id}/cancel", tags=["agent"])
+async def cancel_agent_task(task_id: str):
+    cancelled = desktop_tasks.cancel(task_id)
+    action = desktop_doer.execute(EnvironmentProposal(action="system.cancel_task"))
+    return {"task_id": task_id, "cancelled": cancelled, "action": action.model_dump(mode="json")}
+
+
+@app.get("/api/agent/policies/{cache_key}", tags=["agent"])
+async def inspect_policy(cache_key: str):
+    policy = trained_policies.get(cache_key) or policy_cache.get(cache_key)
+    if policy is None:
+        raise HTTPException(404, "Policy not found")
+    return policy.model_dump(mode="json")
 
 
 def load_state() -> dict[str, Any]:

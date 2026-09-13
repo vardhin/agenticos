@@ -40,7 +40,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `system.cancel_task`
   - [ ] `system.undo_last`
   - [ ] `system.redo_last`
-  - [ ] `system.show_desktop`
+  - [x] `system.show_desktop`
   - [ ] `system.lock`
   - [ ] `system.logout` — confirmation required
   - [ ] `system.restart` — confirmation required
@@ -70,12 +70,12 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `window.close(window_id)`
   - [ ] `window.move(window_id, x, y)`
   - [ ] `window.resize(window_id, width, height)`
-  - [ ] `window.snap(window_id, side)`
+  - [x] `window.snap(window_id, side)`
   - [ ] `window.fullscreen(window_id, enabled)`
   - [ ] `window.cycle(direction)`
 - [ ] `workspace`
-  - [ ] `workspace.create`
-  - [ ] `workspace.switch(index)`
+  - [x] `workspace.create`
+  - [x] `workspace.switch(index)`
   - [ ] `workspace.rename(index, name)`
   - [ ] `workspace.move_window(window_id, index)`
   - [ ] `workspace.remove(index)`
@@ -107,10 +107,10 @@ Each leaf below should become a registered action with the uniform contract.
   - [x] `filesystem.restore(node_id)`
   - [ ] `filesystem.delete_permanently(node_id)` — confirmation required
   - [ ] `filesystem.empty_trash` — confirmation required
-  - [ ] `filesystem.star(node_id, enabled)`
+  - [x] `filesystem.star(node_id, enabled)`
   - [ ] `filesystem.sort(path, field, direction)`
   - [ ] `filesystem.filter(path, type)`
-  - [ ] `filesystem.compress(node_ids, archive_name)`
+  - [x] `filesystem.compress(node_ids, archive_name)`
   - [ ] `filesystem.extract(archive_id, destination)`
   - [ ] `filesystem.mount(device_id)`
   - [ ] `filesystem.unmount(device_id)`
@@ -129,7 +129,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `editor.replace(query, replacement)`
   - [x] `editor.save`
   - [x] `editor.save_as(name, parent)`
-  - [ ] `editor.close_document`
+  - [x] `editor.close_document`
 - [ ] `terminal`
   - [x] `terminal.open`
   - [x] `terminal.execute(command)`
@@ -148,7 +148,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `browser.close_tab(tab_id)`
   - [ ] `browser.switch_tab(tab_id)`
   - [ ] `browser.bookmark(url)`
-  - [ ] `browser.download(resource)`
+  - [x] `browser.download(resource)`
   - [ ] `browser.find_on_page(query)`
   - [x] `browser.copy_url`
 - [ ] `search`
@@ -163,7 +163,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [x] `notification.dismiss(notification_id)`
   - [x] `notification.clear_all`
   - [ ] `notification.snooze(notification_id, duration)`
-  - [ ] `notification.set_dnd(enabled)`
+  - [x] `notification.set_dnd(enabled)`
 - [ ] `network.wifi`
   - [x] `wifi.observe`
   - [x] `wifi.enable`
@@ -194,7 +194,7 @@ Each leaf below should become a registered action with the uniform contract.
 - [ ] `display`
   - [x] `display.set_brightness(percent)`
   - [ ] `display.adjust_brightness(delta)`
-  - [ ] `display.set_theme(theme)`
+  - [x] `display.set_theme(theme)`
   - [ ] `display.set_night_light(enabled)`
   - [ ] `display.set_scale(percent)`
   - [ ] `display.set_resolution(display_id, resolution)`
@@ -214,7 +214,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `software.update(app_id)`
   - [ ] `software.update_all` — confirmation required
 - [ ] `capture`
-  - [ ] `capture.fullscreen`
+  - [x] `capture.fullscreen`
   - [ ] `capture.window(window_id)`
   - [ ] `capture.region(rect)`
   - [ ] `capture.record_start(target)`
@@ -272,7 +272,7 @@ Each leaf below should become a registered action with the uniform contract.
 - [x] Cache trained policies by `(environment_version, task_automaton, constraints)`.
 - [x] Invalidate policies when action semantics or environment version changes.
 - [x] Compare Q-learning against BFS/A* on deterministic tasks.
-- [ ] Add stochastic action outcomes and compare Q-learning against deterministic planning.
+- [x] Add stochastic action outcomes and compare Q-learning against deterministic planning.
 - [ ] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
 - [ ] Add recovery actions and re-plan after live state divergence.
 - [ ] Later: evaluate DQN only when the factored state no longer fits tabular learning.
@@ -331,22 +331,22 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [x] 7 actions — Research handoff
   - Prompt: `Copy the browser address, create a source note, paste the address, save it as source, then reveal it in Files.`
   - Candidate trajectory: `browser.focus → browser.copy_url → editor.new → editor.paste → editor.save_as → filesystem.search → filesystem.reveal`
-- [ ] 8 actions — Workspace setup
+- [x] 8 actions — Workspace setup
   - Prompt: `Create a second workspace, open the browser there, open the editor beside it, create a new note, paste the clipboard, and save it as research.`
   - Candidate trajectory: `workspace.create → workspace.switch → browser.open → editor.open → window.snap → editor.new → editor.paste → editor.save_as`
-- [ ] 9 actions — Download and archive
+- [x] 9 actions — Download and archive
   - Prompt: `Open the browser, download the current page, find the download, rename it report, create an Archive folder, move it there, compress it, and open the archive location.`
   - Candidate trajectory: `browser.open → browser.download → filesystem.open_downloads → filesystem.search → filesystem.rename → filesystem.create_folder → filesystem.move → filesystem.compress → filesystem.open`
-- [ ] 10 actions — Clipboard report workflow
+- [x] 10 actions — Clipboard report workflow
   - Prompt: `Read the clipboard, create a Reports folder, make a new document, paste the clipboard, save it as hero, close the editor, open Files, find hero, move it into Reports, and star it.`
   - Candidate trajectory: `clipboard.read → filesystem.create_folder → editor.new → editor.paste → editor.save_as → editor.close → filesystem.open → filesystem.search → filesystem.move → filesystem.star`
-- [ ] 10 actions — Recovery under failure
+- [x] 10 actions — Recovery under failure
   - Prompt: `Connect to StudioNet, verify internet access, open the browser, visit the project page, copy its address, make a note from it, save it as online, move it to Research, and star it.`
   - Inject failures: first connection attempt times out; browser initially closed; Research may already exist.
   - Success requires observing failures and selecting recovery actions rather than replaying a fixed plan.
-- [ ] 10 actions — Cross-workspace writing task
+- [x] 10 actions — Cross-workspace writing task
   - Prompt: `Open workspace two, launch Files, find hero, copy its contents, switch to workspace one, open the editor, create a document, paste it, save it as hero-copy, and close it.`
-- [ ] 10 actions — Settings and evidence task
+- [x] 10 actions — Settings and evidence task
   - Prompt: `Turn on dark mode, set brightness to 60, enable Do Not Disturb, take a screenshot, save it as setup, open Files, find setup, move it to Pictures, star it, and return to the desktop.`
 
 ## 7. Testing and evaluation
@@ -383,12 +383,12 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
   - [ ] Implement multi-window state and the 8-action workspace benchmark
 - [ ] Phase 4 — Browser + Downloads + Archives
   - [ ] Complete the 9-action benchmark
-- [ ] Phase 5 — Ten-action cross-domain policies
-  - [ ] Complete all deterministic ten-action benchmarks
-  - [ ] Compare learned policies with BFS/A*
+- [x] Phase 5 — Ten-action cross-domain policies
+  - [x] Complete all deterministic ten-action benchmarks
+  - [x] Compare learned policies with BFS/A*
 - [ ] Phase 6 — Uncertainty and recovery
-  - [ ] Add stochastic simulators, failure observations, and recovery rewards
-  - [ ] Complete the ten-action recovery benchmark
+  - [x] Add stochastic simulators, failure observations, and recovery rewards
+  - [x] Complete the ten-action recovery benchmark
 - [ ] Phase 7 — Minimal OS polish
   - [ ] Accessibility, keyboard navigation, empty/loading/error states
   - [ ] Permission model, confirmations, undo, cancellation, and session persistence
@@ -399,7 +399,7 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [ ] The UI provides a coherent launcher, desktop, windows/workspaces, Files, Editor, Terminal, Browser, Settings/Control Centre, notifications, clipboard, software, and capture experience.
 - [ ] Every meaningful UI operation is backed by a discoverable semantic action.
 - [ ] At least three ten-action tasks work from multiple initial states.
-- [ ] At least one ten-action task recovers from injected stochastic failures.
+- [x] At least one ten-action task recovers from injected stochastic failures.
 - [ ] No policy or specialist directly mutates the environment.
 - [ ] Training never runs against destructive live actions.
 - [ ] Every executed action is logged, verified, cancelable, and bounded by safety policy.

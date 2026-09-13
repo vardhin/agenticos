@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -275,11 +276,13 @@ class ActionRegistry:
     def __init__(self, environment_version: str) -> None:
         self.environment_version = environment_version
         self._actions: dict[str, ActionSpec] = {}
+        self._discovered: tuple[ActionSpec, ...] | None = None
 
     def register(self, spec: ActionSpec) -> None:
         if spec.id in self._actions:
             raise ValueError(f"Action already registered: {spec.id}")
         self._actions[spec.id] = spec
+        self._discovered = None
 
     def get(self, action_id: str) -> ActionSpec:
         try:
@@ -288,7 +291,9 @@ class ActionRegistry:
             raise ValueError(f"Unknown action: {action_id}") from exc
 
     def discover(self) -> tuple[ActionSpec, ...]:
-        return tuple(self._actions[key] for key in sorted(self._actions))
+        if self._discovered is None:
+            self._discovered = tuple(self._actions[key] for key in sorted(self._actions))
+        return self._discovered
 
     @property
     def semantics_version(self) -> str:
@@ -353,6 +358,19 @@ class GeneratedSimulator:
             self._revision += 1
         return f"{action_id} completed"
 
+    def record_failure(self, action_id: str) -> None:
+        """Expose a normalized action failure to the next policy decision."""
+        with self._lock:
+            task = self._fields.get("task")
+            if not isinstance(task, dict):
+                return
+            task["last_failure"] = {
+                "action": action_id,
+                "code": "action_failed",
+                "recoverable": True,
+            }
+            self._revision += 1
+
     def _apply(self, effect: Effect, args: Mapping[str, JsonValue]) -> None:
         parts = effect.field.split(".")
         target: dict[str, Any] = self._fields
@@ -372,6 +390,34 @@ class GeneratedSimulator:
             current = target.setdefault(key, [])
             if value in current:
                 current.remove(value)
+
+
+class StochasticSimulator(GeneratedSimulator):
+    """Generated simulator with reproducible, non-destructive action failures."""
+
+    def __init__(
+        self,
+        registry: ActionRegistry,
+        initial_fields: dict[str, JsonValue],
+        *,
+        failure_probabilities: Mapping[str, float] | None = None,
+        failure_schedule: Mapping[str, int] | None = None,
+        seed: int = 0x5EED1234,
+    ) -> None:
+        super().__init__(registry, initial_fields)
+        self.failure_probabilities = dict(failure_probabilities or {})
+        self.failure_schedule = dict(failure_schedule or {})
+        self._rng = random.Random(seed)
+
+    def execute(self, action_id: str, args: Mapping[str, JsonValue]) -> str:
+        remaining = self.failure_schedule.get(action_id, 0)
+        if remaining > 0:
+            self.failure_schedule[action_id] = remaining - 1
+            raise RuntimeError(f"Injected timeout: {action_id}")
+        probability = self.failure_probabilities.get(action_id, 0)
+        if probability and self._rng.random() < probability:
+            raise RuntimeError(f"Stochastic timeout: {action_id}")
+        return super().execute(action_id, args)
 
 
 class Doer:
@@ -400,6 +446,9 @@ class Doer:
             try:
                 message = self.binding.execute(proposal.action, proposal.args)
             except Exception as exc:  # bindings convert platform failures into structured results
+                record_failure = getattr(self.binding, "record_failure", None)
+                if callable(record_failure):
+                    record_failure(proposal.action)
                 after = self.binding.observe()
                 return self._result(proposal, "failed", str(exc), "binding_error", before, after, started)
             after = self.binding.observe()

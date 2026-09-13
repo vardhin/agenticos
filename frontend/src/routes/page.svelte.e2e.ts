@@ -269,6 +269,295 @@ test('learned policy hands the current browser address off to a revealed source 
 		]);
 });
 
+test('learned policy creates a workspace and arranges a saved clipboard note', async ({
+	page,
+	request
+}) => {
+	const basename = `research-${Date.now()}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Create a second workspace, open the browser there, open the editor beside it, create a new note, paste the clipboard, and save it as ${basename}.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(page.getByRole('region', { name: 'Browser window' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Text Editor window' })).toBeVisible();
+	await expect
+		.poll(() =>
+			page.evaluate(() => {
+				const state = (
+					window as unknown as { agentOS: { snapshot(): Record<string, unknown> } }
+				).agentOS.snapshot() as {
+					workspace: number;
+					workspaceCount: number;
+					windows: Record<string, { workspace: number; snap: string | null }>;
+				};
+				return {
+					workspace: state.workspace,
+					workspaceCount: state.workspaceCount,
+					browser: state.windows.browser,
+					editor: state.windows.editor
+				};
+			})
+		)
+		.toEqual({
+			workspace: 2,
+			workspaceCount: 2,
+			browser: expect.objectContaining({ workspace: 2, snap: 'left' }),
+			editor: expect.objectContaining({ workspace: 2, snap: 'right' })
+		});
+	await expect
+		.poll(async () => {
+			const search = await request.get('/backend-api/files/search', {
+				params: { q: `${basename}.txt` }
+			});
+			return (await search.json()).items.length;
+		})
+		.toBe(1);
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'workspace.create',
+				'workspace.switch',
+				'browser.open',
+				'editor.open',
+				'window.snap',
+				'editor.new_document',
+				'editor.paste_content',
+				'editor.save_as'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 8);
+		})
+		.toEqual([
+			'editor.save_as',
+			'editor.paste_content',
+			'editor.new_document',
+			'window.snap',
+			'editor.open',
+			'browser.open',
+			'workspace.switch',
+			'workspace.create'
+		]);
+});
+
+test('learned policy downloads the current page and archives it', async ({ page, request }) => {
+	const suffix = Date.now();
+	const basename = `report-${suffix}`;
+	const folder = `Archive-${suffix}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Open the browser, download the current page, find the download, rename it ${basename}, create an ${folder} folder, move it there, compress it, and open the archive location.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	const filesWindow = page.getByRole('region', { name: 'Files window' });
+	await expect(filesWindow).toBeVisible();
+	await expect(filesWindow).toContainText(`Downloads/${folder}`);
+	await expect(
+		filesWindow.getByRole('button', { name: new RegExp(`${basename}\\.zip`) })
+	).toBeVisible();
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/files', {
+				params: { path: `Downloads/${folder}` }
+			});
+			return response.ok()
+				? (await response.json()).items.map((item: { name: string }) => item.name).sort()
+				: [];
+		})
+		.toEqual([`${basename}.html`, `${basename}.zip`]);
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'browser.open',
+				'browser.download',
+				'filesystem.open_downloads',
+				'filesystem.search',
+				'filesystem.rename',
+				'filesystem.create_folder',
+				'filesystem.move',
+				'filesystem.compress',
+				'filesystem.open'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 9);
+		})
+		.toEqual([
+			'filesystem.open',
+			'filesystem.compress',
+			'filesystem.move',
+			'filesystem.create_folder',
+			'filesystem.rename',
+			'filesystem.search',
+			'filesystem.open_downloads',
+			'browser.download',
+			'browser.open'
+		]);
+});
+
+test('learned policy completes the ten-action clipboard report workflow', async ({
+	page,
+	request
+}) => {
+	const suffix = Date.now();
+	const basename = `hero-${suffix}`;
+	const folder = `Reports-${suffix}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Read the clipboard, create a ${folder} folder, make a new document, paste the clipboard, save it as ${basename}, close the editor, open Files, find ${basename}, move it into ${folder}, and star it.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(page.getByRole('region', { name: 'Text Editor window' })).toBeHidden();
+	await expect(page.getByRole('region', { name: 'Files window' })).toBeVisible();
+	await expect
+		.poll(async () => {
+			const search = await request.get('/backend-api/files/search', {
+				params: { q: `${basename}.txt` }
+			});
+			const items = (await search.json()).items as Array<{
+				name: string;
+				path: string;
+				starred: boolean;
+			}>;
+			return items.map(({ name, path, starred }) => ({ name, path, starred }));
+		})
+		.toContainEqual({
+			name: `${basename}.txt`,
+			path: `/home/agentos/Documents/${folder}/${basename}.txt`,
+			starred: true
+		});
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'clipboard.read',
+				'filesystem.create_folder',
+				'editor.new_document',
+				'editor.paste_content',
+				'editor.save_as',
+				'editor.close_document',
+				'filesystem.open',
+				'filesystem.search',
+				'filesystem.move',
+				'filesystem.star'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 10);
+		})
+		.toEqual([
+			'filesystem.star',
+			'filesystem.move',
+			'filesystem.search',
+			'filesystem.open',
+			'editor.close_document',
+			'editor.save_as',
+			'editor.paste_content',
+			'editor.new_document',
+			'filesystem.create_folder',
+			'clipboard.read'
+		]);
+});
+
+test('learned policy observes a Wi-Fi timeout and recovers before finishing the online note', async ({
+	page,
+	request
+}) => {
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			'Connect to StudioNet, verify internet access, open the browser, visit the project page, copy its address, make a note from it, save it as online, move it to Research, and star it.'
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(page.getByRole('status')).toContainText('q_learning · 11 actions');
+	await expect
+		.poll(() =>
+			page.evaluate(() => {
+				const state = (
+					window as unknown as { agentOS: { snapshot(): Record<string, unknown> } }
+				).agentOS.snapshot() as {
+					wifiEnabled: boolean;
+					connectedNetwork: string | null;
+				};
+				return {
+					wifiEnabled: state.wifiEnabled,
+					connectedNetwork: state.connectedNetwork
+				};
+			})
+		)
+		.toEqual({ wifiEnabled: true, connectedNetwork: 'StudioNet' });
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'wifi.connect',
+				'wifi.test_internet',
+				'browser.open',
+				'browser.navigate',
+				'browser.copy_url',
+				'editor.new_document',
+				'editor.paste_content',
+				'editor.save_as',
+				'filesystem.move',
+				'filesystem.star'
+			];
+			return (await response.json()).items
+				.filter((event: { node: string }) => actionIds.includes(event.node))
+				.map((event: { node: string; result: string }) => `${event.node}:${event.result}`)
+				.slice(0, 11);
+		})
+		.toEqual([
+			'filesystem.star:ok',
+			'filesystem.move:ok',
+			'editor.save_as:ok',
+			'editor.paste_content:ok',
+			'editor.new_document:ok',
+			'browser.copy_url:ok',
+			'browser.navigate:ok',
+			'browser.open:ok',
+			'wifi.test_internet:ok',
+			'wifi.connect:ok',
+			'wifi.connect:error'
+		]);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {
@@ -337,6 +626,8 @@ test('core desktop surfaces share state and remain keyboard accessible', async (
 
 	await page.getByRole('button', { name: 'Overview' }).click();
 	await expect(page.getByLabel('Workspace overview')).toBeVisible();
+	const newWorkspace = page.getByLabel('Workspace overview').getByRole('button', { name: 'New' });
+	if (await newWorkspace.isEnabled()) await newWorkspace.click();
 	await page.getByRole('button', { name: /2.*windows/ }).click();
 	await expect(page.getByLabel('Workspace overview')).toBeHidden();
 

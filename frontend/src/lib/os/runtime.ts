@@ -1,6 +1,6 @@
 import { get, writable } from 'svelte/store';
 import { controlGraph, nodeById } from './graph';
-import { osApi, type WifiObservedState } from './api';
+import { osApi, type AgentObservedState } from './api';
 import type {
 	ActionEvent,
 	CommandSource,
@@ -44,6 +44,7 @@ export const initialState: OSState = {
 	wifiOpen: false,
 	overlay: null,
 	workspace: 1,
+	workspaceCount: 1,
 	wifiEnabled: true,
 	bluetoothEnabled: true,
 	doNotDisturb: false,
@@ -86,21 +87,41 @@ export const initialState: OSState = {
 	installedApps: ['Browser', 'Files', 'Text Editor', 'Terminal', 'Settings'],
 	toast: null,
 	windows: {
-		editor: { open: true, minimized: false, maximized: false, x: 212, y: 116, z: 2, workspace: 1 },
+		editor: {
+			open: true,
+			minimized: false,
+			maximized: false,
+			snap: null,
+			x: 212,
+			y: 116,
+			z: 2,
+			workspace: 1
+		},
 		inspector: {
 			open: true,
 			minimized: false,
 			maximized: false,
+			snap: null,
 			x: 988,
 			y: 116,
 			z: 3,
 			workspace: 1
 		},
-		files: { open: false, minimized: false, maximized: false, x: 370, y: 180, z: 1, workspace: 1 },
+		files: {
+			open: false,
+			minimized: false,
+			maximized: false,
+			snap: null,
+			x: 370,
+			y: 180,
+			z: 1,
+			workspace: 1
+		},
 		settings: {
 			open: false,
 			minimized: false,
 			maximized: false,
+			snap: null,
 			x: 420,
 			y: 145,
 			z: 1,
@@ -110,6 +131,7 @@ export const initialState: OSState = {
 			open: false,
 			minimized: false,
 			maximized: false,
+			snap: null,
 			x: 470,
 			y: 135,
 			z: 1,
@@ -119,6 +141,7 @@ export const initialState: OSState = {
 			open: false,
 			minimized: false,
 			maximized: false,
+			snap: null,
 			x: 330,
 			y: 210,
 			z: 1,
@@ -128,6 +151,7 @@ export const initialState: OSState = {
 			open: false,
 			minimized: false,
 			maximized: false,
+			snap: null,
 			x: 280,
 			y: 130,
 			z: 1,
@@ -358,6 +382,11 @@ export function createOSRuntime() {
 		});
 	}
 
+	function openWindowOnCurrentWorkspace(name: keyof OSState['windows']) {
+		updateWindow(name, { workspace: get(state).workspace });
+		focusWindow(name);
+	}
+
 	function showOverlay(overlay: OverlayName) {
 		state.update((current) => ({
 			...current,
@@ -447,6 +476,12 @@ export function createOSRuntime() {
 				focusWindow('browser');
 				state.update((current) => ({ ...current, overlay: null }));
 				return 'Browser opened';
+			case 'browser.open':
+				openWindowOnCurrentWorkspace('browser');
+				return `Browser opened on workspace ${get(state).workspace}`;
+			case 'editor.open':
+				openWindowOnCurrentWorkspace('editor');
+				return `Text Editor opened on workspace ${get(state).workspace}`;
 			case 'panel.sound':
 				state.update((current) => ({
 					...current,
@@ -486,8 +521,21 @@ export function createOSRuntime() {
 					notifications: current.notifications.filter((item) => item.id !== Number(input))
 				}));
 				return 'Notification dismissed';
+			case 'workspace.create': {
+				const current = get(state);
+				const requested = input === undefined ? current.workspaceCount + 1 : Number(input);
+				if (!Number.isInteger(requested) || requested < 1 || requested > 4)
+					throw new Error('workspace.create requires a workspace number from 1 to 4');
+				state.update((value) => ({
+					...value,
+					workspaceCount: Math.max(value.workspaceCount, requested)
+				}));
+				return `Workspace ${requested} ready`;
+			}
 			case 'workspace.switch': {
-				const workspace = Math.max(1, Math.min(4, Number(input)));
+				const workspace = Number(input);
+				if (!Number.isInteger(workspace) || workspace < 1 || workspace > get(state).workspaceCount)
+					throw new Error(`Workspace ${String(input)} does not exist`);
 				state.update((current) => ({ ...current, workspace, overlay: null }));
 				return `Switched to workspace ${workspace}`;
 			}
@@ -495,6 +543,39 @@ export function createOSRuntime() {
 				const value = input as { window: WindowName; workspace: number };
 				updateWindow(value.window, { workspace: value.workspace });
 				return `Moved ${value.window} to workspace ${value.workspace}`;
+			}
+			case 'window.snap': {
+				const value = (input ?? {}) as {
+					window?: WindowName;
+					side?: 'left' | 'right';
+					beside?: WindowName;
+				};
+				if (!value.window || !['left', 'right'].includes(value.side ?? ''))
+					throw new Error('window.snap requires a window and left or right side');
+				const side = value.side as 'left' | 'right';
+				const workspace = get(state).workspace;
+				updateWindow(value.window, {
+					open: true,
+					minimized: false,
+					maximized: false,
+					snap: side,
+					workspace,
+					x: side === 'left' ? 16 : 804,
+					y: 88
+				});
+				if (value.beside) {
+					const otherSide = side === 'left' ? 'right' : 'left';
+					updateWindow(value.beside, {
+						open: true,
+						minimized: false,
+						maximized: false,
+						snap: otherSide,
+						workspace,
+						x: otherSide === 'left' ? 16 : 804,
+						y: 88
+					});
+				}
+				return `Snapped ${value.window} ${side}${value.beside ? ` beside ${value.beside}` : ''}`;
 			}
 			case 'clipboard.copy': {
 				const value = String(input ?? '');
@@ -575,7 +656,9 @@ export function createOSRuntime() {
 					if (action === 'close') updateWindow(name, { open: false });
 					return `${name} ${action}d`;
 				}
-				if (/^window\.(editor|inspector|files|settings|software|terminal|browser)$/.test(command.node)) {
+				if (
+					/^window\.(editor|inspector|files|settings|software|terminal|browser)$/.test(command.node)
+				) {
 					focusWindow(command.node.split('.')[1] as WindowName);
 					return `${command.node} focused`;
 				}
@@ -626,7 +709,7 @@ export function createOSRuntime() {
 	}
 
 	function moveWindow(name: keyof OSState['windows'], x: number, y: number) {
-		updateWindow(name, { x, y });
+		updateWindow(name, { x, y, snap: null });
 	}
 
 	// High-frequency text editing should update the shared state without creating
@@ -636,11 +719,12 @@ export function createOSRuntime() {
 		state.update((current) => ({ ...current, editorText }));
 	}
 
-	function applyWifiObservation(observation: WifiObservedState) {
+	function applyWifiObservation(observation: AgentObservedState) {
+		const wifi = 'fields' in observation ? observation.fields.wifi : observation;
 		state.update((current) => ({
 			...current,
-			wifiEnabled: observation.enabled,
-			connectedNetwork: observation.ssid
+			wifiEnabled: wifi.enabled,
+			connectedNetwork: wifi.ssid
 		}));
 	}
 

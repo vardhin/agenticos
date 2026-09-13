@@ -2,10 +2,13 @@
 	import { onMount } from 'svelte';
 	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
 	import {
+		runClipboardReportTask,
+		runDownloadArchiveTask,
 		runClipboardFileTask,
 		runFindAppendTask,
 		runOrganizeNoteTask,
 		runResearchHandoffTask,
+		runWorkspaceSetupTask,
 		type LearnedTaskResult
 	} from '$lib/os/learned-policy';
 	import { createOSRuntime } from '$lib/os/runtime';
@@ -70,12 +73,21 @@
 		return `Pasted ${content.length} characters into document`;
 	});
 	runtime.registerHandler('filesystem.search', async (input) => {
-		const query = String(input ?? '').trim();
+		const reference =
+			typeof input === 'object' && input !== null
+				? (input as { reference?: string }).reference
+				: undefined;
+		const query =
+			reference === 'previous_result' ? (taskSearchResult?.name ?? '') : String(input ?? '').trim();
 		if (!query) throw new Error('filesystem.search requires a filename');
 		const matches = await osApi.searchFiles(query);
-		const expected = normalizeTextFileName(query).toLowerCase();
+		const expected = query.toLowerCase();
 		taskSearchResult =
+			matches.find((item) => item.id === taskSearchResult?.id) ??
 			matches.find((item) => item.name.toLowerCase() === expected) ??
+			matches.find(
+				(item) => item.name.toLowerCase() === normalizeTextFileName(query).toLowerCase()
+			) ??
 			matches.find((item) => item.name.toLowerCase() === query.toLowerCase()) ??
 			null;
 		if (!taskSearchResult) throw new Error(`File not found: ${query}`);
@@ -99,7 +111,56 @@
 		if (!path) throw new Error('filesystem.open requires a path');
 		await runtime.dispatch('menu.files.open');
 		await openPath(path);
+		if (taskSearchResult?.path.startsWith(`${path}/`)) selectedFileId = taskSearchResult.id;
 		return `Opened ${path}`;
+	});
+	runtime.registerHandler('filesystem.open_downloads', async () => {
+		await runtime.dispatch('menu.files.open', 'system');
+		await openPath('Downloads');
+		return 'Opened Downloads';
+	});
+	runtime.registerHandler('filesystem.rename', async (input) => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		const value = (input ?? {}) as { name?: string };
+		const requested = value.name?.trim();
+		if (!requested) throw new Error('filesystem.rename requires a name');
+		const extension = taskSearchResult.name.match(/\.[^.]+$/)?.[0] ?? '';
+		const name = requested.includes('.') ? requested : `${requested}${extension}`;
+		taskSearchResult = await osApi.updateFile(taskSearchResult.id, { name });
+		return `Renamed file to ${name}`;
+	});
+	runtime.registerHandler('filesystem.move', async (input) => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		const value = (input ?? {}) as { parent?: string };
+		const parent = value.parent?.trim();
+		if (!parent) throw new Error('filesystem.move requires a parent path');
+		taskSearchResult = await osApi.updateFile(taskSearchResult.id, { parent_path: parent });
+		return `Moved ${taskSearchResult.name} to ${parent}`;
+	});
+	runtime.registerHandler('filesystem.star', async (input) => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		const value = (input ?? {}) as { enabled?: boolean };
+		const enabled = value.enabled ?? true;
+		taskSearchResult = await osApi.updateFile(taskSearchResult.id, { starred: enabled });
+		const selectedId = taskSearchResult.id;
+		await loadFiles();
+		selectedFileId = selectedId;
+		return `${enabled ? 'Starred' : 'Unstarred'} ${taskSearchResult.name}`;
+	});
+	runtime.registerHandler('filesystem.compress', async (input) => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		const value = (input ?? {}) as { archive_name?: string };
+		const requested = value.archive_name?.trim();
+		if (!requested) throw new Error('filesystem.compress requires an archive name');
+		const parent = taskSearchResult.path.slice(0, -(taskSearchResult.name.length + 1));
+		const name = requested.toLowerCase().endsWith('.zip') ? requested : `${requested}.zip`;
+		taskSearchResult = await osApi.createFile({
+			parent_path: parent,
+			name,
+			kind: 'archive',
+			content: JSON.stringify({ files: [taskSearchResult.name] })
+		});
+		return `Compressed file as ${name}`;
 	});
 	runtime.registerHandler('filesystem.create_folder', async (input) => {
 		const value = (input ?? {}) as { parent?: string; name?: string };
@@ -130,6 +191,11 @@
 		if (activeFileName !== expectedName || documentDirty)
 			throw new Error(`Could not save ${expectedName}`);
 		return `Saved ${expectedName} in ${activeFileDirectory}`;
+	});
+	runtime.registerHandler('editor.close_document', async () => {
+		if (documentDirty) throw new Error(`Cannot close unsaved document ${activeFileName}`);
+		await runtime.dispatch('window.editor.close', 'system');
+		return `Closed ${activeFileName}`;
 	});
 	runtime.registerHandler('editor.insert', (input) => {
 		const request =
@@ -191,6 +257,29 @@
 			)
 		}));
 		return `Copied ${browserUrl}`;
+	});
+	runtime.registerHandler('browser.download', async () => {
+		let pageName = 'current-page';
+		try {
+			const url = new URL(browserUrl);
+			const leaf = url.pathname.split('/').filter(Boolean).at(-1) ?? 'index';
+			pageName = `${url.hostname.replace(/[^a-z0-9]+/gi, '-')}-${leaf.replace(/[^a-z0-9.-]+/gi, '-')}`;
+		} catch {
+			pageName = browserUrl.replace(/[^a-z0-9.-]+/gi, '-').replace(/^-|-$/g, '') || pageName;
+		}
+		const name = pageName.toLowerCase().endsWith('.html') ? pageName : `${pageName}.html`;
+		const existing = (await osApi.listFiles('Downloads')).find(
+			(item) => item.name.toLowerCase() === name.toLowerCase()
+		);
+		taskSearchResult =
+			existing ??
+			(await osApi.createFile({
+				parent_path: 'Downloads',
+				name,
+				kind: 'file',
+				content: `Downloaded from ${browserUrl}\n`
+			}));
+		return `Downloaded ${browserUrl} as ${taskSearchResult.name}`;
 	});
 
 	const desktopIcons = [
@@ -378,6 +467,27 @@
 		intentResult = null;
 		intentError = null;
 		try {
+			const clipboardReportResult = await runClipboardReportTask(runtime, command);
+			if (clipboardReportResult) {
+				intentResult = clipboardReportResult;
+				if (clipboardReportResult.status === 'failed')
+					intentError = clipboardReportResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
+			const downloadArchiveResult = await runDownloadArchiveTask(runtime, command);
+			if (downloadArchiveResult) {
+				intentResult = downloadArchiveResult;
+				if (downloadArchiveResult.status === 'failed')
+					intentError = downloadArchiveResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
+			const workspaceSetupResult = await runWorkspaceSetupTask(runtime, command);
+			if (workspaceSetupResult) {
+				intentResult = workspaceSetupResult;
+				if (workspaceSetupResult.status === 'failed')
+					intentError = workspaceSetupResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
 			const researchHandoffResult = await runResearchHandoffTask(runtime, command);
 			if (researchHandoffResult) {
 				intentResult = researchHandoffResult;
@@ -535,6 +645,8 @@
 
 	function windowStyle(name: WindowName): string {
 		const current = $osState.windows[name];
+		if (current.snap)
+			return `left:${current.snap === 'left' ? '16px' : 'calc(50vw + 6px)'};top:88px;width:calc(50vw - 28px);height:calc(100vh - 174px);z-index:${current.z}`;
 		return current.maximized
 			? `z-index:${current.z}`
 			: `left:${current.x}px;top:${current.y}px;z-index:${current.z}`;
@@ -1760,7 +1872,7 @@
 				>
 			</header>
 			<div class="workspace-strip">
-				{#each [1, 2, 3, 4] as workspace (workspace)}<button
+				{#each Array.from({ length: $osState.workspaceCount }, (_, index) => index + 1) as workspace (workspace)}<button
 						class:active={$osState.workspace === workspace}
 						onclick={() => runtime.dispatch({ node: 'workspace.switch', input: workspace })}
 						><span class="workspace-mini"
@@ -1774,7 +1886,11 @@
 								? 'Current'
 								: `${Object.values($osState.windows).filter((item) => item.open && item.workspace === workspace).length} windows`}</small
 						></button
-					>{/each}<button class="add-workspace">＋<small>New</small></button>
+					>{/each}<button
+					class="add-workspace"
+					disabled={$osState.workspaceCount >= 4}
+					onclick={() => runtime.dispatch('workspace.create')}>＋<small>New</small></button
+				>
 			</div>
 			<div class="open-windows">
 				<p class="section-label">OPEN WINDOWS</p>
@@ -1794,7 +1910,7 @@
 								><small>Workspace {value.workspace}</small></button
 							>
 							<div class="move-window">
-								Move to {#each [1, 2, 3, 4] as workspace (workspace)}<button
+								Move to {#each Array.from({ length: $osState.workspaceCount }, (_, index) => index + 1) as workspace (workspace)}<button
 										class:active={value.workspace === workspace}
 										onclick={() =>
 											runtime.dispatch({

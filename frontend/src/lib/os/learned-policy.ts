@@ -1,4 +1,4 @@
-import type { OSCommand } from './types';
+import type { OSCommand, OSState } from './types';
 
 export const taskActionSpace = [
 	'clipboard.read',
@@ -41,7 +41,56 @@ const researchHandoffActionSpace = [
 	'filesystem.reveal'
 ] as const;
 type ResearchHandoffAction = (typeof researchHandoffActionSpace)[number];
-type LearnedAction = TaskAction | FindAppendAction | OrganizeNoteAction | ResearchHandoffAction;
+const workspaceSetupActionSpace = [
+	'workspace.create',
+	'workspace.switch',
+	'browser.open',
+	'editor.open',
+	'window.snap',
+	'editor.new_document',
+	'editor.paste_content',
+	'editor.save_as',
+	'panel.overview',
+	'workspace.window.move'
+] as const;
+type WorkspaceSetupAction = (typeof workspaceSetupActionSpace)[number];
+const downloadArchiveActionSpace = [
+	'browser.open',
+	'browser.download',
+	'filesystem.open_downloads',
+	'filesystem.search',
+	'filesystem.rename',
+	'filesystem.create_folder',
+	'filesystem.move',
+	'filesystem.compress',
+	'filesystem.open',
+	'panel.clipboard',
+	'menu.editor.open'
+] as const;
+type DownloadArchiveAction = (typeof downloadArchiveActionSpace)[number];
+const clipboardReportActionSpace = [
+	'clipboard.read',
+	'filesystem.create_folder',
+	'editor.new_document',
+	'editor.paste_content',
+	'editor.save_as',
+	'editor.close_document',
+	'filesystem.open',
+	'filesystem.search',
+	'filesystem.move',
+	'filesystem.star',
+	'panel.clipboard',
+	'menu.editor.open'
+] as const;
+type ClipboardReportAction = (typeof clipboardReportActionSpace)[number];
+type LearnedAction =
+	| TaskAction
+	| FindAppendAction
+	| OrganizeNoteAction
+	| ResearchHandoffAction
+	| WorkspaceSetupAction
+	| DownloadArchiveAction
+	| ClipboardReportAction;
 type TaskMilestone =
 	| 'clipboard_captured'
 	| 'empty_document_created'
@@ -70,6 +119,25 @@ export interface ResearchHandoffIntent {
 	filename: string;
 }
 
+export interface WorkspaceSetupIntent {
+	type: 'workspace_setup';
+	workspace: number;
+	filename: string;
+}
+
+export interface DownloadArchiveIntent {
+	type: 'download_and_archive';
+	filename: string;
+	folder: string;
+}
+
+export interface ClipboardReportIntent {
+	type: 'clipboard_report';
+	parent: string;
+	folder: string;
+	filename: string;
+}
+
 export interface CompiledTask {
 	goal: ClipboardFileIntent;
 	milestones: TaskMilestone[];
@@ -85,7 +153,14 @@ interface TrainingState {
 
 export interface LearnedTaskResult {
 	command: string;
-	goal: ClipboardFileIntent | FindAppendIntent | OrganizeNoteIntent | ResearchHandoffIntent;
+	goal:
+		| ClipboardFileIntent
+		| FindAppendIntent
+		| OrganizeNoteIntent
+		| ResearchHandoffIntent
+		| WorkspaceSetupIntent
+		| DownloadArchiveIntent
+		| ClipboardReportIntent;
 	route: 'q_learning';
 	training: { episodes: number; states: number; actions: number };
 	plan: Array<{ action: LearnedAction }>;
@@ -128,12 +203,54 @@ interface ResearchHandoffState {
 	fileRevealed: boolean;
 }
 
+interface WorkspaceSetupState {
+	progress: number;
+	workspaceCreated: boolean;
+	workspaceSelected: boolean;
+	browserOpened: boolean;
+	editorOpened: boolean;
+	windowsArranged: boolean;
+	documentCreated: boolean;
+	contentPasted: boolean;
+	documentSaved: boolean;
+}
+
+interface DownloadArchiveState {
+	progress: number;
+	browserOpened: boolean;
+	pageDownloaded: boolean;
+	downloadsOpened: boolean;
+	downloadFound: boolean;
+	downloadRenamed: boolean;
+	folderCreated: boolean;
+	downloadMoved: boolean;
+	archiveCreated: boolean;
+	archiveLocationOpened: boolean;
+}
+
+interface ClipboardReportState {
+	progress: number;
+	clipboardCaptured: boolean;
+	folderCreated: boolean;
+	documentCreated: boolean;
+	contentPasted: boolean;
+	documentSaved: boolean;
+	documentClosed: boolean;
+	filesOpened: boolean;
+	fileFound: boolean;
+	fileMoved: boolean;
+	fileStarred: boolean;
+}
+
 export interface TaskRuntime {
 	dispatch(
 		command: OSCommand,
 		source?: 'human' | 'remote' | 'system'
 	): Promise<{ result: 'ok' | 'error'; detail: string }>;
-	snapshot(): { clipboard: string[]; editorText: string; filesPath: string };
+	snapshot(): Pick<
+		OSState,
+		'clipboard' | 'editorText' | 'filesPath' | 'workspace' | 'workspaceCount' | 'windows'
+	>;
 }
 
 export function compileClipboardFileIntent(command: string): CompiledTask | null {
@@ -770,6 +887,624 @@ export async function runResearchHandoffTask(
 			return buildResearchHandoffResult(command, goal, policy, executions, 'failed', event.detail);
 	}
 	return buildResearchHandoffResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+export function compileWorkspaceSetupIntent(command: string): WorkspaceSetupIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\b(?:create|make|add)\b/i.test(normalized) ||
+		!/\bworkspace\b/i.test(normalized) ||
+		!/\bbrowser\b/i.test(normalized) ||
+		!/\beditor\b/i.test(normalized) ||
+		!/\b(?:beside|alongside|next to)\b/i.test(normalized) ||
+		!/\b(?:note|document|file)\b/i.test(normalized) ||
+		!/\bpaste\b/i.test(normalized) ||
+		!/\bsave\b/i.test(normalized)
+	)
+		return null;
+	const workspaceToken = normalized.match(
+		/\b(?:create|make|add)(?:\s+a)?\s+(?:(second|third|fourth|[2-4](?:st|nd|rd|th)?)\s+)?workspace\b/i
+	)?.[1];
+	const workspaceNames: Record<string, number> = { second: 2, third: 3, fourth: 4 };
+	const workspace = workspaceToken
+		? (workspaceNames[workspaceToken.toLowerCase()] ?? Number.parseInt(workspaceToken, 10))
+		: 2;
+	const filename = normalized.match(
+		/\bsave(?:\s+it)?\s+(?:as|with\s+(?:the\s+)?name)\s+["']?([\w.-]+)["']?/i
+	)?.[1];
+	const cleanFilename = filename?.trim().replace(/[.!?]+$/, '');
+	return cleanFilename && workspace >= 2 && workspace <= 4
+		? { type: 'workspace_setup', workspace, filename: cleanFilename }
+		: null;
+}
+
+function applyWorkspaceSetupAction(
+	state: WorkspaceSetupState,
+	action: WorkspaceSetupAction
+): WorkspaceSetupState {
+	const next = { ...state };
+	if (action === 'workspace.create') next.workspaceCreated = true;
+	if (action === 'workspace.switch' && state.workspaceCreated) next.workspaceSelected = true;
+	if (action === 'browser.open' && state.workspaceSelected) next.browserOpened = true;
+	if (action === 'editor.open' && state.browserOpened) next.editorOpened = true;
+	if (action === 'window.snap' && state.browserOpened && state.editorOpened)
+		next.windowsArranged = true;
+	if (action === 'editor.new_document' && state.windowsArranged) next.documentCreated = true;
+	if (action === 'editor.paste_content' && state.documentCreated) next.contentPasted = true;
+	if (action === 'editor.save_as' && state.contentPasted) next.documentSaved = true;
+	return next;
+}
+
+function workspaceSetupMilestoneSatisfied(progress: number, state: WorkspaceSetupState): boolean {
+	if (progress === 0) return state.workspaceCreated;
+	if (progress === 1) return state.workspaceSelected;
+	if (progress === 2) return state.browserOpened;
+	if (progress === 3) return state.editorOpened;
+	if (progress === 4) return state.windowsArranged;
+	if (progress === 5) return state.documentCreated;
+	if (progress === 6) return state.contentPasted;
+	return state.documentSaved;
+}
+
+function workspaceSetupTransition(
+	state: WorkspaceSetupState,
+	action: WorkspaceSetupAction
+): { state: WorkspaceSetupState; reward: number } {
+	const next = applyWorkspaceSetupAction(state, action);
+	if (!workspaceSetupMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 8 ? 20 : 3 };
+}
+
+function trainWorkspaceSetupPolicy(episodes = 3600): {
+	actions: WorkspaceSetupAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const initialState = (): WorkspaceSetupState => ({
+		progress: 0,
+		workspaceCreated: false,
+		workspaceSelected: false,
+		browserOpened: false,
+		editorOpened: false,
+		windowsArranged: false,
+		documentCreated: false,
+		contentPasted: false,
+		documentSaved: false
+	});
+	const valuesFor = (state: WorkspaceSetupState) => {
+		const key = [
+			state.progress,
+			Number(state.workspaceCreated),
+			Number(state.workspaceSelected),
+			Number(state.browserOpened),
+			Number(state.editorOpened),
+			Number(state.windowsArranged),
+			Number(state.documentCreated),
+			Number(state.contentPasted),
+			Number(state.documentSaved)
+		].join(':');
+		let values = qTable.get(key);
+		if (!values) {
+			values = workspaceSetupActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 56 && state.progress !== 8; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * workspaceSetupActionSpace.length)
+					: bestAction(values);
+			const outcome = workspaceSetupTransition(state, workspaceSetupActionSpace[actionIndex]);
+			const future = outcome.state.progress === 8 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: WorkspaceSetupAction[] = [];
+	let state = initialState();
+	while (state.progress !== 8) {
+		const action = workspaceSetupActionSpace[bestAction(valuesFor(state))];
+		const outcome = workspaceSetupTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned workspace policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runWorkspaceSetupTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileWorkspaceSetupIntent(command);
+	if (!goal) return null;
+	const clipboardContent = runtime.snapshot().clipboard[0];
+	if (clipboardContent === undefined) throw new Error('The clipboard is empty');
+	const policy = trainWorkspaceSetupPolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	for (const action of policy.actions) {
+		const input =
+			action === 'workspace.create' || action === 'workspace.switch'
+				? goal.workspace
+				: action === 'window.snap'
+					? { window: 'editor', side: 'right', beside: 'browser' }
+					: action === 'editor.paste_content'
+						? clipboardContent
+						: action === 'editor.save_as'
+							? { name: goal.filename, parent: 'Documents' }
+							: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildWorkspaceSetupResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	const finalState = runtime.snapshot();
+	const arranged =
+		finalState.workspace === goal.workspace &&
+		finalState.windows.browser.open &&
+		finalState.windows.browser.workspace === goal.workspace &&
+		finalState.windows.browser.snap === 'left' &&
+		finalState.windows.editor.open &&
+		finalState.windows.editor.workspace === goal.workspace &&
+		finalState.windows.editor.snap === 'right' &&
+		finalState.editorText === clipboardContent;
+	return buildWorkspaceSetupResult(
+		command,
+		goal,
+		policy,
+		executions,
+		arranged ? 'succeeded' : 'failed',
+		arranged ? null : 'The final workspace arrangement does not satisfy the compiled goal'
+	);
+}
+
+export function compileDownloadArchiveIntent(command: string): DownloadArchiveIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\bbrowser\b/i.test(normalized) ||
+		!/\bdownload\b/i.test(normalized) ||
+		!/\b(?:current page|page)\b/i.test(normalized) ||
+		!/\bfind\b/i.test(normalized) ||
+		!/\brename\b/i.test(normalized) ||
+		!/\bcreate\b/i.test(normalized) ||
+		!/\bfolder\b/i.test(normalized) ||
+		!/\bmove\b/i.test(normalized) ||
+		!/\bcompress\b/i.test(normalized) ||
+		!/\bopen\b/i.test(normalized)
+	)
+		return null;
+	const filename = normalized.match(
+		/\brename\s+(?:it|the\s+(?:download|file))\s+(?:(?:to|as)\s+)?["']?([\w.-]+)["']?/i
+	)?.[1];
+	const folder = normalized.match(/\bcreate\s+(?:an?\s+)?["']?([\w .-]+?)["']?\s+folder\b/i)?.[1];
+	return filename && folder
+		? {
+				type: 'download_and_archive',
+				filename: filename.trim().replace(/[.!?]+$/, ''),
+				folder: folder.trim()
+			}
+		: null;
+}
+
+function applyDownloadArchiveAction(
+	state: DownloadArchiveState,
+	action: DownloadArchiveAction
+): DownloadArchiveState {
+	const next = { ...state };
+	if (action === 'browser.open') next.browserOpened = true;
+	if (action === 'browser.download' && state.browserOpened) next.pageDownloaded = true;
+	if (action === 'filesystem.open_downloads' && state.pageDownloaded) next.downloadsOpened = true;
+	if (action === 'filesystem.search' && state.downloadsOpened) next.downloadFound = true;
+	if (action === 'filesystem.rename' && state.downloadFound) next.downloadRenamed = true;
+	if (action === 'filesystem.create_folder' && state.downloadRenamed) next.folderCreated = true;
+	if (action === 'filesystem.move' && state.folderCreated) next.downloadMoved = true;
+	if (action === 'filesystem.compress' && state.downloadMoved) next.archiveCreated = true;
+	if (action === 'filesystem.open' && state.archiveCreated) next.archiveLocationOpened = true;
+	return next;
+}
+
+function downloadArchiveMilestoneSatisfied(progress: number, state: DownloadArchiveState): boolean {
+	if (progress === 0) return state.browserOpened;
+	if (progress === 1) return state.pageDownloaded;
+	if (progress === 2) return state.downloadsOpened;
+	if (progress === 3) return state.downloadFound;
+	if (progress === 4) return state.downloadRenamed;
+	if (progress === 5) return state.folderCreated;
+	if (progress === 6) return state.downloadMoved;
+	if (progress === 7) return state.archiveCreated;
+	return state.archiveLocationOpened;
+}
+
+function downloadArchiveTransition(
+	state: DownloadArchiveState,
+	action: DownloadArchiveAction
+): { state: DownloadArchiveState; reward: number } {
+	const next = applyDownloadArchiveAction(state, action);
+	if (!downloadArchiveMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 9 ? 20 : 3 };
+}
+
+function trainDownloadArchivePolicy(episodes = 4600): {
+	actions: DownloadArchiveAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const initialState = (): DownloadArchiveState => ({
+		progress: 0,
+		browserOpened: false,
+		pageDownloaded: false,
+		downloadsOpened: false,
+		downloadFound: false,
+		downloadRenamed: false,
+		folderCreated: false,
+		downloadMoved: false,
+		archiveCreated: false,
+		archiveLocationOpened: false
+	});
+	const valuesFor = (state: DownloadArchiveState) => {
+		const key = [
+			state.progress,
+			Number(state.browserOpened),
+			Number(state.pageDownloaded),
+			Number(state.downloadsOpened),
+			Number(state.downloadFound),
+			Number(state.downloadRenamed),
+			Number(state.folderCreated),
+			Number(state.downloadMoved),
+			Number(state.archiveCreated),
+			Number(state.archiveLocationOpened)
+		].join(':');
+		let values = qTable.get(key);
+		if (!values) {
+			values = downloadArchiveActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 72 && state.progress !== 9; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * downloadArchiveActionSpace.length)
+					: bestAction(values);
+			const outcome = downloadArchiveTransition(state, downloadArchiveActionSpace[actionIndex]);
+			const future = outcome.state.progress === 9 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: DownloadArchiveAction[] = [];
+	let state = initialState();
+	while (state.progress !== 9) {
+		const action = downloadArchiveActionSpace[bestAction(valuesFor(state))];
+		const outcome = downloadArchiveTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned download-and-archive policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runDownloadArchiveTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileDownloadArchiveIntent(command);
+	if (!goal) return null;
+	const policy = trainDownloadArchivePolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	const destination = `Downloads/${goal.folder}`;
+	for (const action of policy.actions) {
+		const input =
+			action === 'browser.download'
+				? { resource: 'current_page' }
+				: action === 'filesystem.search'
+					? { reference: 'previous_result' }
+					: action === 'filesystem.rename'
+						? { reference: 'current_item', name: goal.filename }
+						: action === 'filesystem.create_folder'
+							? { parent: 'Downloads', name: goal.folder }
+							: action === 'filesystem.move'
+								? { reference: 'current_item', parent: destination }
+								: action === 'filesystem.compress'
+									? { reference: 'current_item', archive_name: goal.filename }
+									: action === 'filesystem.open'
+										? destination
+										: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildDownloadArchiveResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	const openedArchiveLocation = runtime.snapshot().filesPath === destination;
+	return buildDownloadArchiveResult(
+		command,
+		goal,
+		policy,
+		executions,
+		openedArchiveLocation ? 'succeeded' : 'failed',
+		openedArchiveLocation ? null : 'The archive location was not open after execution'
+	);
+}
+
+export function compileClipboardReportIntent(command: string): ClipboardReportIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\b(?:read|take|capture)\b/i.test(normalized) ||
+		!/\bclipboard\b/i.test(normalized) ||
+		!/\bcreate\b/i.test(normalized) ||
+		!/\bfolder\b/i.test(normalized) ||
+		!/\b(?:new document|new (?:text )?file)\b/i.test(normalized) ||
+		!/\bpaste\b/i.test(normalized) ||
+		!/\bsave\b/i.test(normalized) ||
+		!/\bclose\b/i.test(normalized) ||
+		!/\bfiles\b/i.test(normalized) ||
+		!/\bfind\b/i.test(normalized) ||
+		!/\bmove\b/i.test(normalized) ||
+		!/\bstar\b/i.test(normalized)
+	)
+		return null;
+	const folder = normalized.match(
+		/\bcreate\s+(?:an?\s+)?(?:folder\s+)?["']?([\w .-]+?)["']?\s+folder\b/i
+	)?.[1];
+	const filename = normalized.match(
+		/\bsave(?:\s+it)?\s+(?:as|with\s+(?:the\s+)?name)\s+["']?([\w.-]+)["']?/i
+	)?.[1];
+	return folder && filename
+		? {
+				type: 'clipboard_report',
+				parent: 'Documents',
+				folder: folder.trim(),
+				filename: filename.trim().replace(/[.!?]+$/, '')
+			}
+		: null;
+}
+
+function applyClipboardReportAction(
+	state: ClipboardReportState,
+	action: ClipboardReportAction
+): ClipboardReportState {
+	const next = { ...state };
+	if (action === 'clipboard.read') next.clipboardCaptured = true;
+	if (action === 'filesystem.create_folder' && state.clipboardCaptured) next.folderCreated = true;
+	if (action === 'editor.new_document' && state.folderCreated) next.documentCreated = true;
+	if (action === 'editor.paste_content' && state.documentCreated) next.contentPasted = true;
+	if (action === 'editor.save_as' && state.contentPasted) next.documentSaved = true;
+	if (action === 'editor.close_document' && state.documentSaved) next.documentClosed = true;
+	if (action === 'filesystem.open' && state.documentClosed) next.filesOpened = true;
+	if (action === 'filesystem.search' && state.filesOpened) next.fileFound = true;
+	if (action === 'filesystem.move' && state.fileFound) next.fileMoved = true;
+	if (action === 'filesystem.star' && state.fileMoved) next.fileStarred = true;
+	return next;
+}
+
+function clipboardReportMilestoneSatisfied(progress: number, state: ClipboardReportState): boolean {
+	return [
+		state.clipboardCaptured,
+		state.folderCreated,
+		state.documentCreated,
+		state.contentPasted,
+		state.documentSaved,
+		state.documentClosed,
+		state.filesOpened,
+		state.fileFound,
+		state.fileMoved,
+		state.fileStarred
+	][progress];
+}
+
+function clipboardReportTransition(
+	state: ClipboardReportState,
+	action: ClipboardReportAction
+): { state: ClipboardReportState; reward: number } {
+	const next = applyClipboardReportAction(state, action);
+	if (!clipboardReportMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 10 ? 20 : 3 };
+}
+
+function trainClipboardReportPolicy(episodes = 5600): {
+	actions: ClipboardReportAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const initialState = (): ClipboardReportState => ({
+		progress: 0,
+		clipboardCaptured: false,
+		folderCreated: false,
+		documentCreated: false,
+		contentPasted: false,
+		documentSaved: false,
+		documentClosed: false,
+		filesOpened: false,
+		fileFound: false,
+		fileMoved: false,
+		fileStarred: false
+	});
+	const valuesFor = (state: ClipboardReportState) => {
+		const key = [
+			state.progress,
+			state.clipboardCaptured,
+			state.folderCreated,
+			state.documentCreated,
+			state.contentPasted,
+			state.documentSaved,
+			state.documentClosed,
+			state.filesOpened,
+			state.fileFound,
+			state.fileMoved,
+			state.fileStarred
+		]
+			.map(Number)
+			.join(':');
+		let values = qTable.get(key);
+		if (!values) {
+			values = clipboardReportActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 88 && state.progress !== 10; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * clipboardReportActionSpace.length)
+					: bestAction(values);
+			const outcome = clipboardReportTransition(state, clipboardReportActionSpace[actionIndex]);
+			const future = outcome.state.progress === 10 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: ClipboardReportAction[] = [];
+	let state = initialState();
+	while (state.progress !== 10) {
+		const action = clipboardReportActionSpace[bestAction(valuesFor(state))];
+		const outcome = clipboardReportTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned clipboard-report policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runClipboardReportTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileClipboardReportIntent(command);
+	if (!goal) return null;
+	const clipboardContent = runtime.snapshot().clipboard[0];
+	if (clipboardContent === undefined) throw new Error('The clipboard is empty');
+	const policy = trainClipboardReportPolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	const destination = `${goal.parent}/${goal.folder}`;
+	for (const action of policy.actions) {
+		const input =
+			action === 'clipboard.read' || action === 'editor.paste_content'
+				? clipboardContent
+				: action === 'filesystem.create_folder'
+					? { parent: goal.parent, name: goal.folder }
+					: action === 'editor.save_as'
+						? { name: goal.filename, parent: goal.parent }
+						: action === 'filesystem.open'
+							? goal.parent
+							: action === 'filesystem.search'
+								? goal.filename
+								: action === 'filesystem.move'
+									? { reference: 'current_item', parent: destination }
+									: action === 'filesystem.star'
+										? { reference: 'current_item', enabled: true }
+										: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildClipboardReportResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	return buildClipboardReportResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+function buildClipboardReportResult(
+	command: string,
+	goal: ClipboardReportIntent,
+	policy: { actions: ClipboardReportAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 5600,
+			states: policy.statesVisited,
+			actions: clipboardReportActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
+}
+
+function buildDownloadArchiveResult(
+	command: string,
+	goal: DownloadArchiveIntent,
+	policy: { actions: DownloadArchiveAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 4600,
+			states: policy.statesVisited,
+			actions: downloadArchiveActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
+}
+
+function buildWorkspaceSetupResult(
+	command: string,
+	goal: WorkspaceSetupIntent,
+	policy: { actions: WorkspaceSetupAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 3600,
+			states: policy.statesVisited,
+			actions: workspaceSetupActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
 }
 
 function buildResearchHandoffResult(

@@ -22,7 +22,7 @@ Useful endpoints:
 - `GET/POST /api/control` (SSE subscriber / command publisher)
 - `GET /api/wifi/state`, `GET /api/wifi/actions`
 - `POST /api/wifi/{enable,disable,scan,connect,disconnect,forget}`
-- `POST /api/agent/tasks` (compile, plan, execute, and verify deterministic Wi-Fi goals)
+- `POST /api/agent/tasks` (compile, train/plan, execute, and verify Wi-Fi or desktop goals)
 
 The Wi-Fi endpoints currently use a deterministic simulated adapter. All operations pass
 through the action registry and Doer, so a NetworkManager adapter can replace the simulator
@@ -40,12 +40,17 @@ The generic discovery and inspection endpoints are:
 
 - `GET /api/actions` — action metadata plus environment/semantics versions
 - `GET /api/environment/state` — canonical factored observation and state hash
+- `GET /api/desktop/state` — complete desktop observation and state hash
 - `POST /api/agent/compile` — constrained language/DSL to semantic task automata
 - `POST /api/actions/{action_id}/execute` — validated, confirmed, verified execution
+- `POST /api/agent/tasks/{task_id}/cancel` — request cancellation between actions
+- `GET /api/agent/policies/{cache_key}` — inspect a trained Q-table and replayable traces
 
 `backend.compiler` supports `SEQUENCE`, `AND`, `OR`, `NOT`, `UNTIL`, `IF`, `PRESERVE`, and
 `CONFIRM_BEFORE`, with structured reference ambiguity. `backend.planning` supplies seeded
 tabular Q-learning, replayable traces, semantics-aware policy caching, and BFS/A* baselines.
 Training operates only on a simulator generated from registry effects.
+Stochastic training can inject seeded transient failures; live benchmark execution uses the
+same normalized failure observation so the learned policy can choose a recovery action.
 
 Run tests with `uv run pytest`.

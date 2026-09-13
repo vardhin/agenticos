@@ -436,6 +436,13 @@ export const controlGraph: ControlNode[] = [
 		description: 'Dismiss one notification'
 	},
 	{
+		id: 'workspace.create',
+		label: 'Create workspace',
+		kind: 'input',
+		parentId: 'panel.overview',
+		description: 'Ensure a numbered workspace exists'
+	},
+	{
 		id: 'workspace.switch',
 		label: 'Switch workspace',
 		kind: 'input',
@@ -448,6 +455,34 @@ export const controlGraph: ControlNode[] = [
 		kind: 'input',
 		parentId: 'panel.overview',
 		description: 'Move a window to another workspace'
+	},
+	{
+		id: 'window.snap',
+		label: 'Snap window',
+		kind: 'input',
+		parentId: 'desktop',
+		description: 'Snap a window to one side, optionally beside another window'
+	},
+	{
+		id: 'browser.open',
+		label: 'Open browser',
+		kind: 'action',
+		parentId: 'window.browser',
+		description: 'Open the browser on the current workspace'
+	},
+	{
+		id: 'browser.download',
+		label: 'Download browser resource',
+		kind: 'input',
+		parentId: 'window.browser',
+		description: 'Download the current page or another browser resource'
+	},
+	{
+		id: 'editor.open',
+		label: 'Open editor',
+		kind: 'action',
+		parentId: 'window.editor',
+		description: 'Open the editor on the current workspace'
 	},
 	{
 		id: 'clipboard.copy',
@@ -469,6 +504,41 @@ export const controlGraph: ControlNode[] = [
 		kind: 'input',
 		parentId: 'desktop.filesystem',
 		description: 'Search the filesystem and capture the matching file in task working memory'
+	},
+	{
+		id: 'filesystem.open_downloads',
+		label: 'Open Downloads',
+		kind: 'action',
+		parentId: 'desktop.filesystem',
+		description: 'Open the Downloads folder'
+	},
+	{
+		id: 'filesystem.rename',
+		label: 'Rename file',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Rename the file in task working memory'
+	},
+	{
+		id: 'filesystem.move',
+		label: 'Move file',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Move the file in task working memory to another folder'
+	},
+	{
+		id: 'filesystem.star',
+		label: 'Star file',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Set the starred state of the file in task working memory'
+	},
+	{
+		id: 'filesystem.compress',
+		label: 'Compress file',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Create an archive containing files from task working memory'
 	},
 	{
 		id: 'filesystem.open_file',
@@ -518,6 +588,13 @@ export const controlGraph: ControlNode[] = [
 		kind: 'input',
 		parentId: 'window.editor',
 		description: 'Save the active document with a name and parent path'
+	},
+	{
+		id: 'editor.close_document',
+		label: 'Close document',
+		kind: 'action',
+		parentId: 'window.editor',
+		description: 'Close the saved editor document'
 	},
 	{
 		id: 'editor.insert',

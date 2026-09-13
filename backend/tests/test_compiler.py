@@ -73,6 +73,89 @@ def test_find_and_append_compiles_to_five_ordered_semantic_milestones() -> None:
     assert "editor.insert" not in serialized
 
 
+def test_clipboard_report_compiles_to_ten_semantic_milestones() -> None:
+    compiled = TaskCompiler().compile(
+        "Read the clipboard, create a Reports folder, make a new document, paste the clipboard, "
+        "save it as hero, close the editor, open Files, find hero, move it into Reports, and star it."
+    )
+
+    assert compiled.automaton is not None
+    assert compiled.automaton.id == "compiled-clipboard-report"
+    assert len(compiled.automaton.milestones) == 10
+    assert compiled.automaton.constraints == {
+        "filename": "hero",
+        "folder": "Reports",
+        "save_parent": "Documents",
+    }
+    serialized = str(compiled.automaton.model_dump())
+    assert "clipboard.read_current" not in serialized
+    assert "'action':" not in serialized
+
+
+def test_recovery_workflow_compiles_failure_constraints_not_an_action_route() -> None:
+    compiled = TaskCompiler().compile(
+        "Connect to StudioNet, verify internet access, open the browser, visit the project page, "
+        "copy its address, make a note from it, save it as online, move it to Research, and star it."
+    )
+
+    assert compiled.automaton is not None
+    assert compiled.automaton.id == "compiled-recovery-online-note"
+    assert len(compiled.automaton.milestones) == 10
+    assert compiled.automaton.constraints["inject_failures"] == {"wifi.connect": 1}
+    assert compiled.automaton.constraints["stochastic_failures"] == {"wifi.connect": 0.2}
+    serialized_milestones = str(
+        [milestone.model_dump() for milestone in compiled.automaton.milestones]
+    )
+    assert "wifi.connect" not in serialized_milestones
+    assert "'action':" not in serialized_milestones
+
+
+def test_cross_workspace_writing_compiles_to_ten_semantic_milestones() -> None:
+    compiled = TaskCompiler().compile(
+        "Open workspace two, launch Files, find hero, copy its contents, switch to workspace one, "
+        "open the editor, create a document, paste it, save it as hero-copy, and close it."
+    )
+
+    assert compiled.automaton is not None
+    assert compiled.automaton.id == "compiled-cross-workspace-writing"
+    assert len(compiled.automaton.milestones) == 10
+    assert compiled.automaton.constraints == {
+        "filename": "hero-copy",
+        "source": "hero",
+        "save_parent": "Documents",
+    }
+    serialized_milestones = str(
+        [milestone.model_dump() for milestone in compiled.automaton.milestones]
+    )
+    assert "workspace.switch" not in serialized_milestones
+    assert "filesystem.read" not in serialized_milestones
+    assert "'action':" not in serialized_milestones
+
+
+def test_settings_evidence_compiles_to_ten_semantic_milestones() -> None:
+    compiled = TaskCompiler().compile(
+        "Turn on dark mode, set brightness to 60%, enable Do Not Disturb, take a screenshot, "
+        "save it as setup, open Files, find setup, move it to Pictures, star it, and return to the desktop."
+    )
+
+    assert compiled.automaton is not None
+    assert compiled.automaton.id == "compiled-settings-evidence"
+    assert len(compiled.automaton.milestones) == 10
+    assert compiled.automaton.constraints == {
+        "filename": "setup",
+        "folder": "Pictures",
+        "brightness": 60,
+        "save_parent": "Pictures",
+    }
+    assert compiled.automaton.milestones[1].goals[0].predicate.value == 60
+    serialized_milestones = str(
+        [milestone.model_dump() for milestone in compiled.automaton.milestones]
+    )
+    assert "display.set_theme" not in serialized_milestones
+    assert "capture.fullscreen" not in serialized_milestones
+    assert "'action':" not in serialized_milestones
+
+
 def test_ambiguous_reference_is_structured() -> None:
     with pytest.raises(AmbiguousReferenceError) as caught:
         TaskCompiler().compile("open that file", {"that file": ["file:1", "file:2"]})
