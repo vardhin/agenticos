@@ -1,0 +1,407 @@
+# AgentOS implementation roadmap
+
+Goal: build a minimal desktop OS whose capabilities are exposed as semantic state, goals, and composable actions. A task compiler converts constrained language into ordered semantic milestones. A learned policy selects actions; only the deterministic Doer can mutate the environment.
+
+Status legend: `[x]` means a usable endpoint or control node already exists; it may still need migration to the uniform environment contract in section 0.
+
+## 0. Non-negotiable architecture
+
+- [ ] Define one environment contract shared by every domain:
+  - [ ] State variables and observation function
+  - [ ] Goals and goal-satisfaction predicates
+  - [ ] Actions with typed arguments
+  - [ ] Preconditions and postconditions
+  - [ ] Effects and affected state fields
+  - [ ] Cost, latency, risk, reversibility, and confirmation metadata
+  - [ ] Simulator binding and real UI/OS binding
+  - [ ] Structured success and failure results
+- [ ] Keep the control boundary strict:
+  - [ ] Compiler emits goals, milestones, parameters, and constraints—not action sequences
+  - [ ] RL/policies return action proposals—not side effects
+  - [ ] Planner validates every proposal against current observed state
+  - [ ] Doer is the only component allowed to execute an action
+  - [ ] Observer verifies state after every action
+  - [ ] Failed verification returns control to the planner/policy
+- [ ] Replace per-feature orchestration with a domain-independent observe → propose → validate → act → verify loop.
+- [ ] Store learned policies separately from action handlers so policies can be retrained safely.
+- [ ] Train against simulators; never explore destructively against the live desktop.
+- [ ] Add deterministic seeds, policy versioning, reward configuration, and reproducible training logs.
+- [ ] Add maximum-step, timeout, cycle-detection, and cumulative-risk limits.
+- [ ] Require confirmation immediately before irreversible or high-risk actions.
+- [ ] Make every task cancelable between actions.
+
+## 1. Agent-operable action tree
+
+Each leaf below should become a registered action with the uniform contract.
+
+- [ ] `system`
+  - [ ] `system.observe`
+  - [ ] `system.wait`
+  - [ ] `system.cancel_task`
+  - [ ] `system.undo_last`
+  - [ ] `system.redo_last`
+  - [ ] `system.show_desktop`
+  - [ ] `system.lock`
+  - [ ] `system.logout` — confirmation required
+  - [ ] `system.restart` — confirmation required
+  - [ ] `system.shutdown` — confirmation required
+- [ ] `launcher`
+  - [ ] `launcher.open`
+  - [ ] `launcher.close`
+  - [ ] `launcher.search(query)`
+  - [ ] `launcher.clear_query`
+  - [ ] `launcher.open_result(result_id)`
+  - [ ] `launcher.open_recent(item_id)`
+  - [ ] `launcher.pin(app_id)`
+  - [ ] `launcher.unpin(app_id)`
+- [ ] `application`
+  - [ ] `application.launch(app_id)`
+  - [ ] `application.focus(app_id)`
+  - [ ] `application.quit(app_id)`
+  - [ ] `application.force_quit(app_id)` — confirmation required
+  - [ ] `application.open_recent(app_id, item_id)`
+  - [ ] `application.set_default(mime_type, app_id)`
+- [ ] `window`
+  - [ ] `window.focus(window_id)`
+  - [ ] `window.minimize(window_id)`
+  - [ ] `window.restore(window_id)`
+  - [ ] `window.maximize(window_id)`
+  - [ ] `window.unmaximize(window_id)`
+  - [ ] `window.close(window_id)`
+  - [ ] `window.move(window_id, x, y)`
+  - [ ] `window.resize(window_id, width, height)`
+  - [ ] `window.snap(window_id, side)`
+  - [ ] `window.fullscreen(window_id, enabled)`
+  - [ ] `window.cycle(direction)`
+- [ ] `workspace`
+  - [ ] `workspace.create`
+  - [ ] `workspace.switch(index)`
+  - [ ] `workspace.rename(index, name)`
+  - [ ] `workspace.move_window(window_id, index)`
+  - [ ] `workspace.remove(index)`
+  - [ ] `workspace.show_overview`
+- [ ] `clipboard`
+  - [x] `clipboard.read_current`
+  - [ ] `clipboard.read_history(index)`
+  - [x] `clipboard.copy(content)`
+  - [ ] `clipboard.cut(resource_id)`
+  - [ ] `clipboard.paste(target_id)`
+  - [ ] `clipboard.pin(index)`
+  - [ ] `clipboard.unpin(index)`
+  - [ ] `clipboard.delete(index)`
+  - [ ] `clipboard.clear` — confirmation required
+- [ ] `filesystem`
+  - [ ] `filesystem.open(path)`
+  - [ ] `filesystem.open_file(file_id)`
+  - [ ] `filesystem.reveal(node_id)`
+  - [x] `filesystem.list(path)`
+  - [x] `filesystem.search(query)`
+  - [x] `filesystem.read(file_id)`
+  - [x] `filesystem.create_file(parent, name, content)`
+  - [x] `filesystem.create_folder(parent, name)`
+  - [x] `filesystem.write(file_id, content)`
+  - [x] `filesystem.rename(node_id, name)`
+  - [x] `filesystem.move(node_id, parent)`
+  - [ ] `filesystem.copy(node_id, parent)`
+  - [x] `filesystem.trash(node_id)`
+  - [x] `filesystem.restore(node_id)`
+  - [ ] `filesystem.delete_permanently(node_id)` — confirmation required
+  - [ ] `filesystem.empty_trash` — confirmation required
+  - [ ] `filesystem.star(node_id, enabled)`
+  - [ ] `filesystem.sort(path, field, direction)`
+  - [ ] `filesystem.filter(path, type)`
+  - [ ] `filesystem.compress(node_ids, archive_name)`
+  - [ ] `filesystem.extract(archive_id, destination)`
+  - [ ] `filesystem.mount(device_id)`
+  - [ ] `filesystem.unmount(device_id)`
+- [ ] `editor`
+  - [x] `editor.open`
+  - [x] `editor.new_document`
+  - [ ] `editor.open_file(file_id)`
+  - [x] `editor.replace_content(content)`
+  - [x] `editor.paste_content(content)`
+  - [ ] `editor.insert(position, content)`
+  - [ ] `editor.select(range)`
+  - [ ] `editor.copy_selection`
+  - [ ] `editor.cut_selection`
+  - [ ] `editor.delete_selection`
+  - [ ] `editor.find(query)`
+  - [ ] `editor.replace(query, replacement)`
+  - [x] `editor.save`
+  - [x] `editor.save_as(name, parent)`
+  - [ ] `editor.close_document`
+- [ ] `terminal`
+  - [x] `terminal.open`
+  - [x] `terminal.execute(command)`
+  - [ ] `terminal.interrupt`
+  - [ ] `terminal.clear`
+  - [ ] `terminal.change_directory(path)`
+  - [ ] `terminal.read_output(range)`
+  - [ ] `terminal.copy_output(range)`
+- [ ] `browser`
+  - [x] `browser.open`
+  - [x] `browser.navigate(url_or_query)`
+  - [ ] `browser.back`
+  - [ ] `browser.forward`
+  - [ ] `browser.reload`
+  - [ ] `browser.new_tab`
+  - [ ] `browser.close_tab(tab_id)`
+  - [ ] `browser.switch_tab(tab_id)`
+  - [ ] `browser.bookmark(url)`
+  - [ ] `browser.download(resource)`
+  - [ ] `browser.find_on_page(query)`
+  - [ ] `browser.copy_url`
+- [ ] `search`
+  - [ ] `search.query(text, domains)`
+  - [ ] `search.filter(type, date, owner)`
+  - [ ] `search.open_result(result_id)`
+  - [ ] `search.reveal_result(result_id)`
+  - [ ] `search.clear`
+- [ ] `notification`
+  - [x] `notification.list`
+  - [ ] `notification.open(notification_id)`
+  - [x] `notification.dismiss(notification_id)`
+  - [x] `notification.clear_all`
+  - [ ] `notification.snooze(notification_id, duration)`
+  - [ ] `notification.set_dnd(enabled)`
+- [ ] `network.wifi`
+  - [x] `wifi.observe`
+  - [x] `wifi.enable`
+  - [x] `wifi.disable`
+  - [x] `wifi.scan`
+  - [x] `wifi.connect(ssid)`
+  - [x] `wifi.disconnect`
+  - [x] `wifi.forget(ssid)` — confirmation required
+  - [ ] `wifi.test_internet`
+  - [ ] `wifi.measure_latency`
+  - [ ] `wifi.measure_throughput`
+- [ ] `bluetooth`
+  - [x] `bluetooth.enable`
+  - [x] `bluetooth.disable`
+  - [ ] `bluetooth.scan`
+  - [ ] `bluetooth.pair(device_id)` — confirmation required
+  - [ ] `bluetooth.connect(device_id)`
+  - [ ] `bluetooth.disconnect(device_id)`
+  - [ ] `bluetooth.forget(device_id)` — confirmation required
+- [ ] `audio`
+  - [x] `audio.set_volume(percent)`
+  - [ ] `audio.adjust_volume(delta)`
+  - [ ] `audio.set_muted(enabled)`
+  - [ ] `audio.select_output(device_id)`
+  - [ ] `audio.select_input(device_id)`
+  - [ ] `audio.set_input_gain(percent)`
+  - [ ] `audio.test_output`
+- [ ] `display`
+  - [x] `display.set_brightness(percent)`
+  - [ ] `display.adjust_brightness(delta)`
+  - [ ] `display.set_theme(theme)`
+  - [ ] `display.set_night_light(enabled)`
+  - [ ] `display.set_scale(percent)`
+  - [ ] `display.set_resolution(display_id, resolution)`
+  - [ ] `display.arrange(display_id, position)`
+- [ ] `settings`
+  - [x] `settings.open`
+  - [ ] `settings.open_section(section_id)`
+  - [ ] `settings.read(key)`
+  - [ ] `settings.set(key, value)`
+  - [ ] `settings.reset(key)` — confirmation required
+- [ ] `software`
+  - [x] `software.open`
+  - [ ] `software.search(query)`
+  - [ ] `software.show_details(app_id)`
+  - [x] `software.install(app_id)` — confirmation required
+  - [x] `software.uninstall(app_id)` — confirmation required
+  - [ ] `software.update(app_id)`
+  - [ ] `software.update_all` — confirmation required
+- [ ] `capture`
+  - [ ] `capture.fullscreen`
+  - [ ] `capture.window(window_id)`
+  - [ ] `capture.region(rect)`
+  - [ ] `capture.record_start(target)`
+  - [ ] `capture.record_stop`
+  - [x] `capture.save(name, parent)`
+  - [ ] `capture.copy_to_clipboard`
+- [ ] `open_share`
+  - [ ] `open_with.open(node_id, app_id)`
+  - [ ] `share.copy_link(node_id)`
+  - [ ] `share.send(node_id, target)` — confirmation required
+
+## 2. Factored environment state
+
+- [ ] Add stable IDs for apps, windows, workspaces, files, devices, networks, tabs, and notifications.
+- [ ] Add task working memory for captured values without copying entire OS state into the policy.
+- [ ] Model at minimum:
+  - [ ] Focused app/window and open/minimized/maximized state
+  - [ ] Current workspace and window membership
+  - [ ] Current path, selection, and active file
+  - [ ] Active editor document, dirty flag, and persisted filename
+  - [ ] Clipboard current item and history metadata
+  - [ ] Network, Bluetooth, audio, display, theme, and DND state
+  - [ ] Running task, task progress, pending confirmation, and last failure
+- [ ] Hash/canonicalize factored states for tabular policies.
+- [ ] Add partial-observation markers instead of treating unknown values as false.
+- [ ] Record before/after state diffs for every action.
+
+## 3. Task compiler and ordered goals
+
+- [ ] Replace feature-specific regex entry points with a small compositional grammar.
+- [ ] Support operators:
+  - [ ] `SEQUENCE(A, B, ...)`
+  - [ ] `AND(A, B, ...)`
+  - [ ] `OR(A, B, ...)`
+  - [ ] `NOT(A)`
+  - [ ] `UNTIL(condition, action)`
+  - [ ] `IF(condition, then, else)`
+  - [ ] `PRESERVE(condition)`
+  - [ ] `CONFIRM_BEFORE(action)`
+- [ ] Support references: `it`, `there`, `that file`, `current item`, `previous result`.
+- [ ] Support parameter extraction for quoted names, paths, percentages, SSIDs, app names, and durations.
+- [ ] Compile instructions into semantic milestones/task automata—not action lists.
+- [ ] Return structured ambiguity when a reference has multiple valid targets.
+- [ ] Keep an LLM adapter optional and outside the execution loop for unsupported language only.
+
+## 4. RL and planning infrastructure
+
+- [x] Train a tabular Q-learning policy over an ordered task automaton.
+- [x] Use a simulator for training and the deterministic Doer for live execution.
+- [x] Include irrelevant actions so the first policy must discover a path rather than replay one.
+- [ ] Generate the simulator from registered preconditions/effects instead of handwritten transitions.
+- [ ] Make action-space discovery dynamic from the registry.
+- [ ] Add sparse terminal reward, milestone reward, step cost, failure penalty, and risk penalty.
+- [ ] Add replayable training traces and Q-table inspection to the Control Graph Inspector.
+- [ ] Cache trained policies by `(environment_version, task_automaton, constraints)`.
+- [ ] Invalidate policies when action semantics or environment version changes.
+- [ ] Compare Q-learning against BFS/A* on deterministic tasks.
+- [ ] Add stochastic action outcomes and compare Q-learning against deterministic planning.
+- [ ] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
+- [ ] Add recovery actions and re-plan after live state divergence.
+- [ ] Later: evaluate DQN only when the factored state no longer fits tabular learning.
+
+## 5. Minimal OS user interfaces
+
+- [ ] Desktop shell
+  - [x] Panel/dock, clock, launcher, status controls, desktop icons
+  - [x] Movable/minimizable/maximizable windows
+  - [ ] Keyboard-first focus traversal and shortcuts
+  - [ ] Session/lock/power surfaces
+- [ ] Launcher and global search
+  - [x] Apps and command input
+  - [ ] Unified apps/files/settings/actions results
+  - [ ] Task preview showing interpreted milestones before execution
+  - [ ] Running-task progress, cancel, retry, and rollback controls
+- [ ] Files
+  - [x] Browse, search, create, edit, trash, restore
+  - [ ] Copy/move/rename affordances, sorting, filters, archive operations
+  - [ ] Open With and external-drive surfaces
+- [ ] Text editor
+  - [x] New/open/edit/save/save-as
+  - [ ] Selection, find/replace, tabs, close-with-unsaved confirmation
+- [ ] Terminal
+  - [x] Minimal command set and history
+  - [ ] Interrupt, output selection, copy, persistent working directory
+- [ ] Browser
+  - [x] Address bar and basic navigation surface
+  - [ ] Tabs, history, bookmarks, downloads
+- [ ] Control Centre and Settings
+  - [x] Wi-Fi, Bluetooth toggle, volume, brightness, theme, DND
+  - [ ] Device selection, detailed network/Bluetooth panels, display settings
+- [ ] Notifications, clipboard history, overview, software, and capture
+  - [x] Minimal surfaces
+  - [ ] Complete their registered action coverage
+- [ ] Control Graph Inspector
+  - [x] Nodes, events, and state views
+  - [ ] Preconditions/effects/cost/risk viewer
+  - [ ] Task automaton visualization
+  - [ ] Q-table/policy visualization
+  - [ ] Live observe → propose → act → verify timeline
+
+## 6. Learned task benchmarks
+
+Each benchmark must be compiled to semantic goals, trained in simulation, executed through the Doer, and verified from observed state. The compiler must not emit the expected action sequence.
+
+- [x] 4 actions — Clipboard to named note
+  - Prompt: `First take the clipboard content, make a new text file, paste it there, then save it with name "hero".`
+  - Expected discovered trajectory: `clipboard.read → editor.new → editor.paste → editor.save_as`
+- [ ] 5 actions — Find and append
+  - Prompt: `Find the file named hero, open it, add the current clipboard content at the end, and save it.`
+  - Candidate trajectory: `filesystem.search → filesystem.open → clipboard.read → editor.insert → editor.save`
+- [ ] 6 actions — Organize a note
+  - Prompt: `Create a Projects folder in Documents, make a note from the clipboard, save it as brief, and move it into Projects.`
+  - Candidate trajectory: `filesystem.open → filesystem.create_folder → clipboard.read → editor.new → editor.paste → editor.save_as`
+- [ ] 7 actions — Research handoff
+  - Prompt: `Copy the browser address, create a source note, paste the address, save it as source, then reveal it in Files.`
+  - Candidate trajectory: `browser.focus → browser.copy_url → editor.new → editor.paste → editor.save_as → filesystem.search → filesystem.reveal`
+- [ ] 8 actions — Workspace setup
+  - Prompt: `Create a second workspace, open the browser there, open the editor beside it, create a new note, paste the clipboard, and save it as research.`
+  - Candidate trajectory: `workspace.create → workspace.switch → browser.open → editor.open → window.snap → editor.new → editor.paste → editor.save_as`
+- [ ] 9 actions — Download and archive
+  - Prompt: `Open the browser, download the current page, find the download, rename it report, create an Archive folder, move it there, compress it, and open the archive location.`
+  - Candidate trajectory: `browser.open → browser.download → filesystem.open_downloads → filesystem.search → filesystem.rename → filesystem.create_folder → filesystem.move → filesystem.compress → filesystem.open`
+- [ ] 10 actions — Clipboard report workflow
+  - Prompt: `Read the clipboard, create a Reports folder, make a new document, paste the clipboard, save it as hero, close the editor, open Files, find hero, move it into Reports, and star it.`
+  - Candidate trajectory: `clipboard.read → filesystem.create_folder → editor.new → editor.paste → editor.save_as → editor.close → filesystem.open → filesystem.search → filesystem.move → filesystem.star`
+- [ ] 10 actions — Recovery under failure
+  - Prompt: `Connect to StudioNet, verify internet access, open the browser, visit the project page, copy its address, make a note from it, save it as online, move it to Research, and star it.`
+  - Inject failures: first connection attempt times out; browser initially closed; Research may already exist.
+  - Success requires observing failures and selecting recovery actions rather than replaying a fixed plan.
+- [ ] 10 actions — Cross-workspace writing task
+  - Prompt: `Open workspace two, launch Files, find hero, copy its contents, switch to workspace one, open the editor, create a document, paste it, save it as hero-copy, and close it.`
+- [ ] 10 actions — Settings and evidence task
+  - Prompt: `Turn on dark mode, set brightness to 60, enable Do Not Disturb, take a screenshot, save it as setup, open Files, find setup, move it to Pictures, star it, and return to the desktop.`
+
+## 7. Testing and evaluation
+
+- [ ] Unit-test every action precondition, effect, and goal predicate.
+- [ ] Contract-test simulator and live binding for equivalent state transitions.
+- [ ] Test task compilation independently from policy training.
+- [ ] Assert learned trajectories without placing expected trajectories in the compiler.
+- [ ] Add property tests for invalid action ordering, idempotency, and bounded execution.
+- [ ] Add injected failures: timeout, stale state, missing file, permission denied, disappearing network, duplicate filename.
+- [ ] Add safety tests for confirmation, cancellation, maximum risk, and rollback.
+- [ ] Run every benchmark from multiple initial states.
+- [ ] Track:
+  - [ ] Success rate
+  - [ ] Training time and inference time
+  - [ ] Environment steps and unnecessary actions
+  - [ ] Recovery rate
+  - [ ] Policy-cache hit rate
+  - [ ] Planner versus RL performance
+  - [ ] Live/simulator divergence
+  - [ ] LLM escalation frequency and cost
+
+## 8. Delivery phases
+
+- [ ] Phase 1 — Generalize the current clipboard prototype
+  - [ ] Move action effects into the shared registry
+  - [ ] Generate the training simulator from action metadata
+  - [ ] Add task/policy inspection to the UI
+  - [ ] Persist and reuse the learned Q-table
+- [ ] Phase 2 — Complete Files + Editor + Clipboard breadth
+  - [ ] Implement all missing actions required by the 5–7 action benchmarks
+  - [ ] Add semantic observers and end-to-end verification
+- [ ] Phase 3 — Windows + Workspaces + Search
+  - [ ] Implement multi-window state and the 8-action workspace benchmark
+- [ ] Phase 4 — Browser + Downloads + Archives
+  - [ ] Complete the 9-action benchmark
+- [ ] Phase 5 — Ten-action cross-domain policies
+  - [ ] Complete all deterministic ten-action benchmarks
+  - [ ] Compare learned policies with BFS/A*
+- [ ] Phase 6 — Uncertainty and recovery
+  - [ ] Add stochastic simulators, failure observations, and recovery rewards
+  - [ ] Complete the ten-action recovery benchmark
+- [ ] Phase 7 — Minimal OS polish
+  - [ ] Accessibility, keyboard navigation, empty/loading/error states
+  - [ ] Permission model, confirmations, undo, cancellation, and session persistence
+  - [ ] Performance budget and packaged deployment
+
+## Definition of done for the minimal AgentOS
+
+- [ ] The UI provides a coherent launcher, desktop, windows/workspaces, Files, Editor, Terminal, Browser, Settings/Control Centre, notifications, clipboard, software, and capture experience.
+- [ ] Every meaningful UI operation is backed by a discoverable semantic action.
+- [ ] At least three ten-action tasks work from multiple initial states.
+- [ ] At least one ten-action task recovers from injected stochastic failures.
+- [ ] No policy or specialist directly mutates the environment.
+- [ ] Training never runs against destructive live actions.
+- [ ] Every executed action is logged, verified, cancelable, and bounded by safety policy.
+- [ ] Deterministic tasks have BFS/A* baselines and RL is justified by measured uncertainty or reuse.
+- [ ] Routine learned-policy inference completes locally without an LLM call.

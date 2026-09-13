@@ -170,6 +170,13 @@ export const controlGraph: ControlNode[] = [
 		description: 'Update editor text'
 	},
 	{
+		id: 'window.editor.paste',
+		label: 'Paste into document',
+		kind: 'input',
+		parentId: 'window.editor',
+		description: 'Paste supplied clipboard content into the active document'
+	},
+	{
 		id: 'window.editor.new',
 		label: 'New text document',
 		kind: 'action',
@@ -434,6 +441,13 @@ export const controlGraph: ControlNode[] = [
 		kind: 'input',
 		parentId: 'panel.clipboard',
 		description: 'Put an item on the clipboard'
+	},
+	{
+		id: 'clipboard.read',
+		label: 'Read current item',
+		kind: 'action',
+		parentId: 'panel.clipboard',
+		description: 'Read the current clipboard item into task working memory'
 	},
 	{
 		id: 'capture.save',

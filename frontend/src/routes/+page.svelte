@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
+	import { runClipboardFileTask, type LearnedTaskResult } from '$lib/os/learned-policy';
 	import { createOSRuntime } from '$lib/os/runtime';
 	import type { OSCommand, WindowName } from '$lib/os/types';
 
@@ -35,7 +36,7 @@
 	let backendOnline = $state(false);
 	let filesLoading = $state(false);
 	let intentRunning = $state(false);
-	let intentResult = $state<AgentTaskResult | null>(null);
+	let intentResult = $state<AgentTaskResult | LearnedTaskResult | null>(null);
 	let intentError = $state<string | null>(null);
 	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -44,9 +45,22 @@
 		return 'New document created';
 	});
 	runtime.registerHandler('window.editor.save', async (input) => {
-		if (typeof input === 'string' && input.trim()) await saveDocumentAs(input.trim());
-		else await saveDocument();
+		if (typeof input === 'string' && input.trim()) {
+			const expectedName = normalizeTextFileName(input.trim());
+			await saveDocumentAs(input.trim());
+			if (activeFileName !== expectedName || documentDirty)
+				throw new Error(`Could not save ${expectedName}`);
+		} else await saveDocument();
 		return `Saved ${activeFileName}`;
+	});
+	runtime.registerHandler('clipboard.read', (input) => {
+		const content = String(input ?? '');
+		return `Read ${content.length} characters from clipboard`;
+	});
+	runtime.registerHandler('window.editor.paste', (input) => {
+		const content = String(input ?? '');
+		editDocument(content);
+		return `Pasted ${content.length} characters into document`;
 	});
 	runtime.registerHandler('files.create', async (input) => {
 		const value = (input ?? {}) as {
@@ -261,6 +275,13 @@
 		intentResult = null;
 		intentError = null;
 		try {
+			const learnedResult = await runClipboardFileTask(runtime, command);
+			if (learnedResult) {
+				intentResult = learnedResult;
+				if (learnedResult.status === 'failed')
+					intentError = learnedResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
 			const result = await osApi.runAgentTask(command);
 			intentResult = result;
 			runtime.applyWifiObservation(result.final_state);

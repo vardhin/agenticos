@@ -24,6 +24,63 @@ test('launcher submits natural-language intents to the backend', async ({ page, 
 	expect((await state.json()).enabled).toBe(true);
 });
 
+test('learned policy completes a clipboard to saved text-file trajectory', async ({
+	page,
+	request
+}) => {
+	const name = `hero-${Date.now()}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`first take the clipboard content, make a new text file, paste it there, then save it with name "${name}"`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	const editor = page.getByRole('region', { name: 'Text Editor window' });
+	await expect(editor).toBeVisible();
+	await expect(editor).toContainText(`${name}.txt`);
+	await expect(page.getByRole('textbox', { name: 'Document text' })).toHaveValue(
+		'https://agentos.dev/docs'
+	);
+
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/files/search', {
+				params: { q: `${name}.txt` }
+			});
+			return (await response.json()).items[0]?.name;
+		})
+		.toBe(`${name}.txt`);
+	const search = await request.get('/backend-api/files/search', { params: { q: `${name}.txt` } });
+	const file = (await search.json()).items[0];
+	const saved = await request.get(`/backend-api/files/${file.id}`, {
+		params: { include_content: true }
+	});
+	expect((await saved.json()).content).toBe('https://agentos.dev/docs');
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const policyNodes = (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) =>
+					[
+						'clipboard.read',
+						'window.editor.new',
+						'window.editor.paste',
+						'window.editor.save'
+					].includes(node)
+				);
+			return policyNodes.slice(0, 4);
+		})
+		.toEqual(['window.editor.save', 'window.editor.paste', 'window.editor.new', 'clipboard.read']);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {
