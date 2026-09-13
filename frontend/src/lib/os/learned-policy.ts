@@ -20,7 +20,18 @@ const findAppendActionSpace = [
 	'menu.editor.open'
 ] as const;
 type FindAppendAction = (typeof findAppendActionSpace)[number];
-type LearnedAction = TaskAction | FindAppendAction;
+const organizeNoteActionSpace = [
+	'filesystem.open',
+	'filesystem.create_folder',
+	'clipboard.read',
+	'editor.new_document',
+	'editor.paste_content',
+	'editor.save_as',
+	'panel.clipboard',
+	'menu.editor.open'
+] as const;
+type OrganizeNoteAction = (typeof organizeNoteActionSpace)[number];
+type LearnedAction = TaskAction | FindAppendAction | OrganizeNoteAction;
 type TaskMilestone =
 	| 'clipboard_captured'
 	| 'empty_document_created'
@@ -34,6 +45,13 @@ export interface ClipboardFileIntent {
 
 export interface FindAppendIntent {
 	type: 'find_and_append';
+	filename: string;
+}
+
+export interface OrganizeNoteIntent {
+	type: 'organize_note';
+	parent: string;
+	folder: string;
 	filename: string;
 }
 
@@ -52,7 +70,7 @@ interface TrainingState {
 
 export interface LearnedTaskResult {
 	command: string;
-	goal: ClipboardFileIntent | FindAppendIntent;
+	goal: ClipboardFileIntent | FindAppendIntent | OrganizeNoteIntent;
 	route: 'q_learning';
 	training: { episodes: number; states: number; actions: number };
 	plan: Array<{ action: LearnedAction }>;
@@ -72,6 +90,16 @@ interface FindAppendState {
 	clipboardCaptured: boolean;
 	contentInserted: boolean;
 	saved: boolean;
+}
+
+interface OrganizeNoteState {
+	progress: number;
+	parentOpened: boolean;
+	folderCreated: boolean;
+	clipboardCaptured: boolean;
+	documentCreated: boolean;
+	contentPasted: boolean;
+	savedInFolder: boolean;
 }
 
 export interface TaskRuntime {
@@ -417,6 +445,185 @@ export async function runFindAppendTask(
 			return buildFindAppendResult(command, goal, policy, executions, 'failed', event.detail);
 	}
 	return buildFindAppendResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+export function compileOrganizeNoteIntent(command: string): OrganizeNoteIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\bcreate\b/i.test(normalized) ||
+		!/\bfolder\b/i.test(normalized) ||
+		!/(?:\bclipboard\b|\bnote from (?:the )?clipboard\b)/i.test(normalized) ||
+		!/\bsave\b/i.test(normalized)
+	)
+		return null;
+	const folderMatch = normalized.match(
+		/\bcreate\s+(?:a\s+)?(?:folder\s+)?["']?([\w .-]+?)["']?\s+folder\s+in\s+["']?([\w /.-]+?)["']?(?=,|\bthen\b|\band\b)/i
+	);
+	const alternateFolderMatch = normalized.match(
+		/\bcreate\s+(?:a\s+)?["']?([\w .-]+?)["']?\s+in\s+["']?([\w /.-]+?)["']?\s+folder\b/i
+	);
+	const filename = normalized.match(
+		/\bsave(?:\s+it)?\s+(?:as|with\s+(?:the\s+)?name)\s+["']?([\w.-]+)["']?/i
+	)?.[1];
+	const match = folderMatch ?? alternateFolderMatch;
+	if (!match || !filename) return null;
+	return {
+		type: 'organize_note',
+		folder: match[1].trim(),
+		parent: match[2].trim(),
+		filename: filename.trim()
+	};
+}
+
+function applyOrganizeNoteAction(
+	state: OrganizeNoteState,
+	action: OrganizeNoteAction
+): OrganizeNoteState {
+	const next = { ...state };
+	if (action === 'filesystem.open') next.parentOpened = true;
+	if (action === 'filesystem.create_folder' && state.parentOpened) next.folderCreated = true;
+	if (action === 'clipboard.read' && state.folderCreated) next.clipboardCaptured = true;
+	if (action === 'editor.new_document' && state.clipboardCaptured) next.documentCreated = true;
+	if (action === 'editor.paste_content' && state.documentCreated) next.contentPasted = true;
+	if (action === 'editor.save_as' && state.contentPasted && state.folderCreated)
+		next.savedInFolder = true;
+	return next;
+}
+
+function organizeNoteMilestoneSatisfied(progress: number, state: OrganizeNoteState): boolean {
+	if (progress === 0) return state.parentOpened;
+	if (progress === 1) return state.folderCreated;
+	if (progress === 2) return state.clipboardCaptured;
+	if (progress === 3) return state.documentCreated;
+	if (progress === 4) return state.contentPasted;
+	return state.savedInFolder;
+}
+
+function organizeNoteTransition(
+	state: OrganizeNoteState,
+	action: OrganizeNoteAction
+): { state: OrganizeNoteState; reward: number } {
+	const next = applyOrganizeNoteAction(state, action);
+	if (!organizeNoteMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 6 ? 20 : 3 };
+}
+
+function trainOrganizeNotePolicy(episodes = 2200): {
+	actions: OrganizeNoteAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const initialState = (): OrganizeNoteState => ({
+		progress: 0,
+		parentOpened: false,
+		folderCreated: false,
+		clipboardCaptured: false,
+		documentCreated: false,
+		contentPasted: false,
+		savedInFolder: false
+	});
+	const valuesFor = (state: OrganizeNoteState) => {
+		const key = [
+			state.progress,
+			Number(state.parentOpened),
+			Number(state.folderCreated),
+			Number(state.clipboardCaptured),
+			Number(state.documentCreated),
+			Number(state.contentPasted),
+			Number(state.savedInFolder)
+		].join(':');
+		let values = qTable.get(key);
+		if (!values) {
+			values = organizeNoteActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 40 && state.progress !== 6; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * organizeNoteActionSpace.length)
+					: bestAction(values);
+			const outcome = organizeNoteTransition(state, organizeNoteActionSpace[actionIndex]);
+			const future = outcome.state.progress === 6 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: OrganizeNoteAction[] = [];
+	let state = initialState();
+	while (state.progress !== 6) {
+		const action = organizeNoteActionSpace[bestAction(valuesFor(state))];
+		const outcome = organizeNoteTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runOrganizeNoteTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileOrganizeNoteIntent(command);
+	if (!goal) return null;
+	const clipboardContent = runtime.snapshot().clipboard[0];
+	if (clipboardContent === undefined) throw new Error('The clipboard is empty');
+	const policy = trainOrganizeNotePolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	for (const action of policy.actions) {
+		const input =
+			action === 'filesystem.open'
+				? goal.parent
+				: action === 'filesystem.create_folder'
+					? { parent: goal.parent, name: goal.folder }
+					: action === 'clipboard.read' || action === 'editor.paste_content'
+						? clipboardContent
+						: action === 'editor.save_as'
+							? { name: goal.filename, parent: `${goal.parent}/${goal.folder}` }
+							: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildOrganizeNoteResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	return buildOrganizeNoteResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+function buildOrganizeNoteResult(
+	command: string,
+	goal: OrganizeNoteIntent,
+	policy: { actions: OrganizeNoteAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 2200,
+			states: policy.statesVisited,
+			actions: organizeNoteActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
 }
 
 function buildFindAppendResult(

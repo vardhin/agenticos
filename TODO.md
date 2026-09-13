@@ -91,7 +91,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `clipboard.delete(index)`
   - [ ] `clipboard.clear` — confirmation required
 - [ ] `filesystem`
-  - [ ] `filesystem.open(path)`
+  - [x] `filesystem.open(path)`
   - [x] `filesystem.open_file(file_id)`
   - [ ] `filesystem.reveal(node_id)`
   - [x] `filesystem.list(path)`
@@ -325,7 +325,7 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [x] 5 actions — Find and append
   - Prompt: `Find the file named hero, open it, add the current clipboard content at the end, and save it.`
   - Candidate trajectory: `filesystem.search → filesystem.open → clipboard.read → editor.insert → editor.save`
-- [ ] 6 actions — Organize a note
+- [x] 6 actions — Organize a note
   - Prompt: `Create a Projects folder in Documents, make a note from the clipboard, save it as brief, and move it into Projects.`
   - Candidate trajectory: `filesystem.open → filesystem.create_folder → clipboard.read → editor.new → editor.paste → editor.save_as`
 - [ ] 7 actions — Research handoff

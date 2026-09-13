@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
-	import { runClipboardFileTask, runFindAppendTask, type LearnedTaskResult } from '$lib/os/learned-policy';
+	import {
+		runClipboardFileTask,
+		runFindAppendTask,
+		runOrganizeNoteTask,
+		type LearnedTaskResult
+	} from '$lib/os/learned-policy';
 	import { createOSRuntime } from '$lib/os/runtime';
 	import type { OSCommand, WindowName } from '$lib/os/types';
 
@@ -79,6 +84,43 @@
 		if (!taskSearchResult) throw new Error('No file has been captured by search');
 		await openFile(taskSearchResult);
 		return `Opened ${taskSearchResult.name}`;
+	});
+	runtime.registerHandler('filesystem.open', async (input) => {
+		const path = String(input ?? '').trim();
+		if (!path) throw new Error('filesystem.open requires a path');
+		await runtime.dispatch('menu.files.open');
+		await openPath(path);
+		return `Opened ${path}`;
+	});
+	runtime.registerHandler('filesystem.create_folder', async (input) => {
+		const value = (input ?? {}) as { parent?: string; name?: string };
+		const parent = value.parent?.trim();
+		const name = value.name?.trim();
+		if (!parent || !name) throw new Error('filesystem.create_folder requires parent and name');
+		const existing = (await osApi.listFiles(parent)).find(
+			(item) => item.kind === 'folder' && item.name.toLowerCase() === name.toLowerCase()
+		);
+		if (!existing) await osApi.createFile({ parent_path: parent, name, kind: 'folder' });
+		await loadFiles(parent);
+		return existing ? `Folder ${name} already exists` : `Created folder ${name}`;
+	});
+	runtime.registerHandler('editor.new_document', async () => {
+		await newDocument(false);
+		return 'New document created';
+	});
+	runtime.registerHandler('editor.paste_content', (input) => {
+		const content = String(input ?? '');
+		editDocument(content);
+		return `Pasted ${content.length} characters into document`;
+	});
+	runtime.registerHandler('editor.save_as', async (input) => {
+		const value = (input ?? {}) as { name?: string; parent?: string };
+		if (!value.name?.trim()) throw new Error('editor.save_as requires a name');
+		await saveDocumentAs(value.name.trim(), value.parent?.trim());
+		const expectedName = normalizeTextFileName(value.name.trim());
+		if (activeFileName !== expectedName || documentDirty)
+			throw new Error(`Could not save ${expectedName}`);
+		return `Saved ${expectedName} in ${activeFileDirectory}`;
 	});
 	runtime.registerHandler('editor.insert', (input) => {
 		const request =
@@ -313,6 +355,13 @@
 		intentResult = null;
 		intentError = null;
 		try {
+			const organizeNoteResult = await runOrganizeNoteTask(runtime, command);
+			if (organizeNoteResult) {
+				intentResult = organizeNoteResult;
+				if (organizeNoteResult.status === 'failed')
+					intentError = organizeNoteResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
 			const findAppendResult = await runFindAppendTask(runtime, command);
 			if (findAppendResult) {
 				intentResult = findAppendResult;
@@ -360,9 +409,9 @@
 			backendOnline = connected;
 			resetEditorHistory(runtime.snapshot().editorText);
 			if (!connected) return;
-				loadedPath = runtime.snapshot().filesPath;
-				void loadFiles(loadedPath);
-				void linkInitialDocument();
+			loadedPath = runtime.snapshot().filesPath;
+			void loadFiles(loadedPath);
+			void linkInitialDocument();
 			backendStream = osApi.commandStream();
 			backendStream.addEventListener(
 				'command',
@@ -394,15 +443,15 @@
 				event.preventDefault();
 				void runtime.dispatch('panel.overview');
 			}
-				if (event.key === 'PrintScreen') void runtime.dispatch('panel.capture');
-				if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-					event.preventDefault();
-					void (event.shiftKey ? saveDocumentAs() : saveDocument());
-				}
-				if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
-					event.preventDefault();
-					void newDocument();
-				}
+			if (event.key === 'PrintScreen') void runtime.dispatch('panel.capture');
+			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+				event.preventDefault();
+				void (event.shiftKey ? saveDocumentAs() : saveDocument());
+			}
+			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+				event.preventDefault();
+				void newDocument();
+			}
 			if (event.key === 'Escape' && $osState.overlay)
 				void runtime.dispatch(
 					`panel.${$osState.overlay === 'launcher' ? 'menu' : $osState.overlay}`
@@ -609,9 +658,11 @@
 		return value.toLowerCase().endsWith('.txt') ? value : `${value}.txt`;
 	}
 
-	async function saveDocumentAs(suggestedName?: string) {
+	async function saveDocumentAs(suggestedName?: string, suggestedParentPath?: string) {
 		if (!backendOnline) {
-			const requested = (suggestedName ?? window.prompt('Save text file as', activeFileName))?.trim();
+			const requested = (
+				suggestedName ?? window.prompt('Save text file as', activeFileName)
+			)?.trim();
 			if (!requested) return;
 			activeFileName = normalizeTextFileName(requested);
 			activeFileDirectory = 'Local documents';
@@ -623,9 +674,11 @@
 		const requested = (suggestedName ?? window.prompt('Save text file as', activeFileName))?.trim();
 		if (!requested) return;
 		const name = normalizeTextFileName(requested);
-		const parentPath = ['Recent', 'Starred', 'Trash', 'File System'].includes($osState.filesPath)
-			? 'Documents'
-			: $osState.filesPath;
+		const parentPath =
+			suggestedParentPath ??
+			(['Recent', 'Starred', 'Trash', 'File System'].includes($osState.filesPath)
+				? 'Documents'
+				: $osState.filesPath);
 		try {
 			const created = await osApi.createFile({
 				parent_path: parentPath,
@@ -641,7 +694,10 @@
 			await runtime.dispatch({ node: 'files.action', input: `Saved ${name}` });
 		} catch (error) {
 			await runtime.dispatch(
-				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to save file' },
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to save file'
+				},
 				'system'
 			);
 		}
@@ -655,7 +711,10 @@
 			await runtime.dispatch({ node: 'files.action', input: `Saved ${activeFileName}` });
 		} catch (error) {
 			await runtime.dispatch(
-				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to save file' },
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to save file'
+				},
 				'system'
 			);
 		}
@@ -678,7 +737,10 @@
 			await runtime.dispatch({ node: 'files.action', input: `Created ${name}` });
 		} catch (error) {
 			await runtime.dispatch(
-				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to create file' },
+				{
+					node: 'files.action',
+					input: error instanceof Error ? error.message : 'Unable to create file'
+				},
 				'system'
 			);
 		}
@@ -761,7 +823,9 @@
 				output.push('terminal: filesystem backend is offline');
 			} else if (command === 'ls') {
 				const entries = await osApi.listFiles(args.join(' ') || terminalDirectory);
-				output.push(entries.map((item) => (item.kind === 'folder' ? `${item.name}/` : item.name)).join('  '));
+				output.push(
+					entries.map((item) => (item.kind === 'folder' ? `${item.name}/` : item.name)).join('  ')
+				);
 			} else if (command === 'cd') {
 				const destination = args.join(' ') || 'Home';
 				await osApi.listFiles(destination);
@@ -786,12 +850,14 @@
 			output.push(error instanceof Error ? error.message : String(error));
 		}
 		terminalLines = [...terminalLines, ...output];
-		if (logAction)
-			await runtime.dispatch({ node: 'files.action', input: `Terminal: ${raw}` });
+		if (logAction) await runtime.dispatch({ node: 'files.action', input: `Terminal: ${raw}` });
 	}
 
 	function browseTerminalHistory(offset: -1 | 1) {
-		terminalHistoryIndex = Math.max(0, Math.min(terminalHistory.length, terminalHistoryIndex + offset));
+		terminalHistoryIndex = Math.max(
+			0,
+			Math.min(terminalHistory.length, terminalHistoryIndex + offset)
+		);
 		terminalInput = terminalHistory[terminalHistoryIndex] ?? '';
 	}
 
@@ -893,24 +959,41 @@
 				</div>
 			</header>
 			<nav class="menubar" aria-label="Editor menus">
-				<button onclick={() => newDocument()}>File</button><button onclick={undoDocument}>Edit</button><button>View</button><button>Search</button
-				><button>Tools</button><button>Documents</button><button>Help</button>
+				<button onclick={() => newDocument()}>File</button><button onclick={undoDocument}
+					>Edit</button
+				><button>View</button><button>Search</button><button>Tools</button><button>Documents</button
+				><button>Help</button>
 			</nav>
 			<div class="toolbar" aria-label="Editor toolbar">
-				<button title="New document" aria-label="New document" onclick={() => newDocument()}><img src="/assets/icons/document-new.svg" alt="" /></button
+				<button title="New document" aria-label="New document" onclick={() => newDocument()}
+					><img src="/assets/icons/document-new.svg" alt="" /></button
 				><button title="Save document" onclick={saveDocument}
 					><img src="/assets/icons/document-save.svg" alt="" /></button
-				><button class="save-as-button" title="Save document as" onclick={() => saveDocumentAs()}>Save As</button
-				><span class="tool-separator"></span><button title="Undo" aria-label="Undo" onclick={undoDocument} disabled={editorHistoryIndex <= 0}
+				><button class="save-as-button" title="Save document as" onclick={() => saveDocumentAs()}
+					>Save As</button
+				><span class="tool-separator"></span><button
+					title="Undo"
+					aria-label="Undo"
+					onclick={undoDocument}
+					disabled={editorHistoryIndex <= 0}
 					><img src="/assets/icons/edit-undo.svg" alt="" /></button
-				><button title="Redo" aria-label="Redo" onclick={redoDocument} disabled={editorHistoryIndex >= editorHistory.length - 1}><img src="/assets/icons/edit-redo.svg" alt="" /></button><span
-					class="format-label">Plain Text</span
-				><img class="chevron" src="/assets/icons/go-down.svg" alt="" /><span class="tool-separator"
-				></span><span class="format-label">Spaces: 4</span>
+				><button
+					title="Redo"
+					aria-label="Redo"
+					onclick={redoDocument}
+					disabled={editorHistoryIndex >= editorHistory.length - 1}
+					><img src="/assets/icons/edit-redo.svg" alt="" /></button
+				><span class="format-label">Plain Text</span><img
+					class="chevron"
+					src="/assets/icons/go-down.svg"
+					alt=""
+				/><span class="tool-separator"></span><span class="format-label">Spaces: 4</span>
 			</div>
 			<div class="document-tab">
-				<img src="/assets/icons/editor.svg" alt="" /><span>{documentDirty ? '● ' : ''}{activeFileName}</span><button
-					aria-label="Close tab" onclick={() => newDocument()}><img src="/assets/icons/window-close.svg" alt="" /></button
+				<img src="/assets/icons/editor.svg" alt="" /><span
+					>{documentDirty ? '● ' : ''}{activeFileName}</span
+				><button aria-label="Close tab" onclick={() => newDocument()}
+					><img src="/assets/icons/window-close.svg" alt="" /></button
 				>
 			</div>
 			<div class="editor-body">
@@ -928,11 +1011,12 @@
 						updateCursor(event);
 					}}
 					onclick={updateCursor}
-					onkeyup={updateCursor}
-				></textarea>
+					onkeyup={updateCursor}></textarea>
 			</div>
 			<footer class="statusbar">
-				<span>{documentDirty ? 'Modified' : 'Saved'}</span><span>Plain Text</span><span>Tab Width: 4</span><span>Ln {editorLine}, Col {editorColumn}</span>
+				<span>{documentDirty ? 'Modified' : 'Saved'}</span><span>Plain Text</span><span
+					>Tab Width: 4</span
+				><span>Ln {editorLine}, Col {editorColumn}</span>
 			</footer>
 		</section>
 	{/if}
@@ -1088,8 +1172,16 @@
 				</div>
 			</header>
 			<div class="files-toolbar">
-				<button aria-label="Back" onclick={() => navigateFiles(-1)} disabled={pathHistoryIndex === 0}><img src="/assets/icons/go-previous.svg" alt="" /></button><button
-					aria-label="Forward" onclick={() => navigateFiles(1)} disabled={pathHistoryIndex >= pathHistory.length - 1}><img src="/assets/icons/go-next.svg" alt="" /></button
+				<button
+					aria-label="Back"
+					onclick={() => navigateFiles(-1)}
+					disabled={pathHistoryIndex === 0}
+					><img src="/assets/icons/go-previous.svg" alt="" /></button
+				><button
+					aria-label="Forward"
+					onclick={() => navigateFiles(1)}
+					disabled={pathHistoryIndex >= pathHistory.length - 1}
+					><img src="/assets/icons/go-next.svg" alt="" /></button
 				><span><img src="/assets/icons/go-home.svg" alt="" /> {$osState.filesPath}</span>
 				<label class="files-search"
 					><img src="/assets/icons/search.svg" alt="" /><input
@@ -1411,14 +1503,42 @@
 					>
 				</div>
 			</header>
-			<form class="browser-toolbar" onsubmit={(event) => { event.preventDefault(); navigateBrowser(); }}>
-				<button type="button" aria-label="Browser back" onclick={() => browseBrowserHistory(-1)} disabled={browserHistoryIndex === 0}>←</button>
-				<button type="button" aria-label="Browser forward" onclick={() => browseBrowserHistory(1)} disabled={browserHistoryIndex >= browserHistory.length - 1}>→</button>
-				<button type="button" aria-label="Reload page" onclick={() => { const current = browserUrl; browserUrl = 'about:blank'; requestAnimationFrame(() => browserUrl = current); }}>↻</button>
+			<form
+				class="browser-toolbar"
+				onsubmit={(event) => {
+					event.preventDefault();
+					navigateBrowser();
+				}}
+			>
+				<button
+					type="button"
+					aria-label="Browser back"
+					onclick={() => browseBrowserHistory(-1)}
+					disabled={browserHistoryIndex === 0}>←</button
+				>
+				<button
+					type="button"
+					aria-label="Browser forward"
+					onclick={() => browseBrowserHistory(1)}
+					disabled={browserHistoryIndex >= browserHistory.length - 1}>→</button
+				>
+				<button
+					type="button"
+					aria-label="Reload page"
+					onclick={() => {
+						const current = browserUrl;
+						browserUrl = 'about:blank';
+						requestAnimationFrame(() => (browserUrl = current));
+					}}>↻</button
+				>
 				<input aria-label="Address and search bar" bind:value={browserInput} spellcheck="false" />
 				<button type="submit">Go</button>
 			</form>
-			<iframe title="Browser page" src={browserUrl} sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"></iframe>
+			<iframe
+				title="Browser page"
+				src={browserUrl}
+				sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+			></iframe>
 			<footer class="browser-status">{browserUrl}</footer>
 		</section>
 	{/if}
@@ -1521,14 +1641,22 @@
 				/><kbd>esc</kbd></label
 			>
 			{#if intentRunning || intentResult || intentError}
-				<div class:failed={Boolean(intentError)} class="intent-result" role="status" aria-live="polite">
+				<div
+					class:failed={Boolean(intentError)}
+					class="intent-result"
+					role="status"
+					aria-live="polite"
+				>
 					{#if intentRunning}
 						<span class="intent-spinner"></span><strong>Resolving intent…</strong>
 					{:else if intentError}
-						<span>!</span><div><strong>Couldn’t complete that</strong><small>{intentError}</small></div>
+						<span>!</span>
+						<div><strong>Couldn’t complete that</strong><small>{intentError}</small></div>
 					{:else if intentResult}
-						<span>✓</span><div
-							><strong>{intentResult.executions.length === 0
+						<span>✓</span>
+						<div>
+							<strong
+								>{intentResult.executions.length === 0
 									? 'Already done'
 									: intentResult.executions.at(-1)?.message}</strong
 							><small
@@ -1536,8 +1664,8 @@
 									.executions.length === 1
 									? ''
 									: 's'}</small
-							></div
-						>
+							>
+						</div>
 					{/if}
 				</div>
 			{/if}
@@ -1877,14 +2005,16 @@
 				class:active={$osState.focusedWindow === 'editor'}
 				class="task-button"
 				onclick={() => runtime.dispatch('panel.editor')}
-					><img src="/assets/icons/editor.svg" alt="" /><span>{documentDirty ? '● ' : ''}{activeFileName}</span></button
-				><button
-					class:active={$osState.focusedWindow === 'inspector'}
+				><img src="/assets/icons/editor.svg" alt="" /><span
+					>{documentDirty ? '● ' : ''}{activeFileName}</span
+				></button
+			><button
+				class:active={$osState.focusedWindow === 'inspector'}
 				class="task-button inspector-task"
 				onclick={() => runtime.dispatch('panel.inspector')}
-					><img src="/assets/icons/settings.svg" alt="" /><span>Control Graph Inspector</span></button
-				>
-				{#if $osState.windows.browser.open}<button
+				><img src="/assets/icons/settings.svg" alt="" /><span>Control Graph Inspector</span></button
+			>
+			{#if $osState.windows.browser.open}<button
 					class:active={$osState.focusedWindow === 'browser'}
 					class="task-button"
 					onclick={() => runtime.dispatch('window.browser')}

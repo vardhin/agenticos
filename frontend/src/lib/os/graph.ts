@@ -464,6 +464,41 @@ export const controlGraph: ControlNode[] = [
 		description: 'Open a file found by its stable identifier or name'
 	},
 	{
+		id: 'filesystem.open',
+		label: 'Open folder',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Open Files at a semantic path'
+	},
+	{
+		id: 'filesystem.create_folder',
+		label: 'Create folder',
+		kind: 'input',
+		parentId: 'desktop.filesystem',
+		description: 'Create a named folder under a parent path'
+	},
+	{
+		id: 'editor.new_document',
+		label: 'New document',
+		kind: 'action',
+		parentId: 'window.editor',
+		description: 'Create an empty editor document'
+	},
+	{
+		id: 'editor.paste_content',
+		label: 'Paste content',
+		kind: 'input',
+		parentId: 'window.editor',
+		description: 'Paste supplied clipboard content into the active document'
+	},
+	{
+		id: 'editor.save_as',
+		label: 'Save document as',
+		kind: 'input',
+		parentId: 'window.editor',
+		description: 'Save the active document with a name and parent path'
+	},
+	{
 		id: 'editor.insert',
 		label: 'Insert text',
 		kind: 'input',

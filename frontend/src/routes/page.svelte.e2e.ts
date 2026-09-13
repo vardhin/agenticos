@@ -148,6 +148,68 @@ test('learned policy finds a file and appends the current clipboard item', async
 		]);
 });
 
+test('learned policy organizes a clipboard note into a new folder', async ({ page, request }) => {
+	const suffix = Date.now();
+	const folder = `Projects-${suffix}`;
+	const basename = `brief-${suffix}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Create a ${folder} folder in Documents, make a note from the clipboard, save it as ${basename}, and move it into ${folder}.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(page.getByRole('region', { name: 'Text Editor window' })).toContainText(
+		`${basename}.txt`
+	);
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/files', {
+				params: { path: `Documents/${folder}` }
+			});
+			return response.ok() ? (await response.json()).items : [];
+		})
+		.toContainEqual(expect.objectContaining({ name: `${basename}.txt` }));
+	const search = await request.get('/backend-api/files/search', {
+		params: { q: `${basename}.txt` }
+	});
+	const file = (await search.json()).items[0];
+	const saved = await request.get(`/backend-api/files/${file.id}`, {
+		params: { include_content: true }
+	});
+	expect((await saved.json()).content).toBe('https://agentos.dev/docs');
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'filesystem.open',
+				'filesystem.create_folder',
+				'clipboard.read',
+				'editor.new_document',
+				'editor.paste_content',
+				'editor.save_as'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 6);
+		})
+		.toEqual([
+			'editor.save_as',
+			'editor.paste_content',
+			'editor.new_document',
+			'clipboard.read',
+			'filesystem.create_folder',
+			'filesystem.open'
+		]);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {
