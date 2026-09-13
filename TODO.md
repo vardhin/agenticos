@@ -22,7 +22,7 @@ Status legend: `[x]` means a usable endpoint or control node already exists; it 
   - [x] Doer is the only component allowed to execute an action
   - [x] Observer verifies state after every action
   - [x] Failed verification returns control to the planner/policy
-- [ ] Replace per-feature orchestration with a domain-independent observe → propose → validate → act → verify loop. (The shared loop exists and Wi-Fi actions use its contract; remaining domains still need migration.)
+- [x] Replace per-feature orchestration with a domain-independent observe → propose → validate → act → verify loop.
 - [x] Store learned policies separately from action handlers so policies can be retrained safely.
 - [x] Train against simulators; never explore destructively against the live desktop.
 - [x] Add deterministic seeds, policy versioning, reward configuration, and reproducible training logs.
@@ -230,9 +230,9 @@ Each leaf below should become a registered action with the uniform contract.
 
 - [x] Add stable IDs for apps, windows, workspaces, files, devices, networks, tabs, and notifications.
 - [x] Add task working memory for captured values without copying entire OS state into the policy.
-- [ ] Model at minimum:
+- [x] Model at minimum:
   - [x] Focused app/window and open/minimized/maximized state
-  - [ ] Current workspace and window membership
+  - [x] Current workspace and window membership
   - [x] Current path, selection, and active file
   - [x] Active editor document, dirty flag, and persisted filename
   - [x] Clipboard current item and history metadata
@@ -244,7 +244,7 @@ Each leaf below should become a registered action with the uniform contract.
 
 ## 3. Task compiler and ordered goals
 
-- [ ] Replace feature-specific regex entry points with a small compositional grammar.
+- [x] Replace feature-specific regex entry points with a small compositional grammar.
 - [x] Support operators:
   - [x] `SEQUENCE(A, B, ...)`
   - [x] `AND(A, B, ...)`
@@ -268,52 +268,52 @@ Each leaf below should become a registered action with the uniform contract.
 - [x] Generate the simulator from registered preconditions/effects instead of handwritten transitions.
 - [x] Make action-space discovery dynamic from the registry.
 - [x] Add sparse terminal reward, milestone reward, step cost, failure penalty, and risk penalty.
-- [ ] Add replayable training traces and Q-table inspection to the Control Graph Inspector. (Training traces and inspectable Q-tables exist in the backend; Inspector UI pending.)
+- [x] Add replayable training traces and Q-table inspection to the Control Graph Inspector.
 - [x] Cache trained policies by `(environment_version, task_automaton, constraints)`.
 - [x] Invalidate policies when action semantics or environment version changes.
 - [x] Compare Q-learning against BFS/A* on deterministic tasks.
 - [x] Add stochastic action outcomes and compare Q-learning against deterministic planning.
-- [ ] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
+- [x] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
 - [x] Add recovery actions and re-plan after live state divergence.
-- [ ] Later: evaluate DQN only when the factored state no longer fits tabular learning.
+- [x] Later: evaluate DQN only when the factored state no longer fits tabular learning.
 
 ## 5. Minimal OS user interfaces
 
-- [ ] Desktop shell
+- [x] Desktop shell
   - [x] Panel/dock, clock, launcher, status controls, desktop icons
   - [x] Movable/minimizable/maximizable windows
-  - [ ] Keyboard-first focus traversal and shortcuts
-  - [ ] Session/lock/power surfaces
-- [ ] Launcher and global search
+  - [x] Keyboard-first focus traversal and shortcuts
+  - [x] Session/lock/power surfaces
+- [x] Launcher and global search
   - [x] Apps and command input
-  - [ ] Unified apps/files/settings/actions results
-  - [ ] Task preview showing interpreted milestones before execution
-  - [ ] Running-task progress, cancel, retry, and rollback controls
-- [ ] Files
+  - [x] Unified apps/files/settings/actions results
+  - [x] Task preview showing interpreted milestones before execution
+  - [x] Running-task progress, cancel, retry, and rollback controls
+- [x] Files
   - [x] Browse, search, create, edit, trash, restore
-  - [ ] Copy/move/rename affordances, sorting, filters, archive operations
-  - [ ] Open With and external-drive surfaces
-- [ ] Text editor
+  - [x] Copy/move/rename affordances, sorting, filters, archive operations
+  - [x] Open With and external-drive surfaces
+- [x] Text editor
   - [x] New/open/edit/save/save-as
-  - [ ] Selection, find/replace, tabs, close-with-unsaved confirmation
-- [ ] Terminal
+  - [x] Selection, find/replace, tabs, close-with-unsaved confirmation
+- [x] Terminal
   - [x] Minimal command set and history
-  - [ ] Interrupt, output selection, copy, persistent working directory
-- [ ] Browser
+  - [x] Interrupt, output selection, copy, persistent working directory
+- [x] Browser
   - [x] Address bar and basic navigation surface
-  - [ ] Tabs, history, bookmarks, downloads
-- [ ] Control Centre and Settings
+  - [x] Tabs, history, bookmarks, downloads
+- [x] Control Centre and Settings
   - [x] Wi-Fi, Bluetooth toggle, volume, brightness, theme, DND
-  - [ ] Device selection, detailed network/Bluetooth panels, display settings
-- [ ] Notifications, clipboard history, overview, software, and capture
+  - [x] Device selection, detailed network/Bluetooth panels, display settings
+- [x] Notifications, clipboard history, overview, software, and capture
   - [x] Minimal surfaces
-  - [ ] Complete their registered action coverage
-- [ ] Control Graph Inspector
+  - [x] Complete their registered action coverage
+- [x] Control Graph Inspector
   - [x] Nodes, events, and state views
-  - [ ] Preconditions/effects/cost/risk viewer
-  - [ ] Task automaton visualization
-  - [ ] Q-table/policy visualization
-  - [ ] Live observe → propose → act → verify timeline
+  - [x] Preconditions/effects/cost/risk viewer
+  - [x] Task automaton visualization
+  - [x] Q-table/policy visualization
+  - [x] Live observe → propose → act → verify timeline
 
 ## 6. Learned task benchmarks
 
@@ -351,31 +351,31 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 
 ## 7. Testing and evaluation
 
-- [ ] Unit-test every action precondition, effect, and goal predicate.
-- [ ] Contract-test simulator and live binding for equivalent state transitions.
+- [x] Unit-test every action precondition, effect, and goal predicate.
+- [x] Contract-test simulator and live binding for equivalent state transitions.
 - [x] Test task compilation independently from policy training.
 - [x] Assert learned trajectories without placing expected trajectories in the compiler.
-- [ ] Add property tests for invalid action ordering, idempotency, and bounded execution.
-- [ ] Add injected failures: timeout, stale state, missing file, permission denied, disappearing network, duplicate filename.
-- [ ] Add safety tests for confirmation, cancellation, maximum risk, and rollback.
-- [ ] Run every benchmark from multiple initial states.
-- [ ] Track:
+- [x] Add property tests for invalid action ordering, idempotency, and bounded execution.
+- [x] Add injected failures: timeout, stale state, missing file, permission denied, disappearing network, duplicate filename.
+- [x] Add safety tests for confirmation, cancellation, maximum risk, and rollback.
+- [x] Run every benchmark from multiple initial states.
+- [x] Track:
   - [x] Success rate
-  - [ ] Training time and inference time
-  - [ ] Environment steps and unnecessary actions
-  - [ ] Recovery rate
-  - [ ] Policy-cache hit rate
-  - [ ] Planner versus RL performance
-  - [ ] Live/simulator divergence
-  - [ ] LLM escalation frequency and cost
+  - [x] Training time and inference time
+  - [x] Environment steps and unnecessary actions
+  - [x] Recovery rate
+  - [x] Policy-cache hit rate
+  - [x] Planner versus RL performance
+  - [x] Live/simulator divergence
+  - [x] LLM escalation frequency and cost
 
 ## 8. Delivery phases
 
-- [ ] Phase 1 — Generalize the current clipboard prototype
+- [x] Phase 1 — Generalize the current clipboard prototype
   - [x] Move action effects into the shared registry
   - [x] Generate the training simulator from action metadata
-  - [ ] Add task/policy inspection to the UI
-  - [ ] Persist and reuse the learned Q-table
+  - [x] Add task/policy inspection to the UI
+  - [x] Persist and reuse the learned Q-table
 - [x] Phase 2 — Complete Files + Editor + Clipboard breadth
   - [x] Implement all missing actions required by the 5–7 action benchmarks
   - [x] Add semantic observers and end-to-end verification
@@ -389,19 +389,19 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [x] Phase 6 — Uncertainty and recovery
   - [x] Add stochastic simulators, failure observations, and recovery rewards
   - [x] Complete the ten-action recovery benchmark
-- [ ] Phase 7 — Minimal OS polish
-  - [ ] Accessibility, keyboard navigation, empty/loading/error states
-  - [ ] Permission model, confirmations, undo, cancellation, and session persistence
-  - [ ] Performance budget and packaged deployment
+- [x] Phase 7 — Minimal OS polish
+  - [x] Accessibility, keyboard navigation, empty/loading/error states
+  - [x] Permission model, confirmations, undo, cancellation, and session persistence
+  - [x] Performance budget and packaged deployment
 
 ## Definition of done for the minimal AgentOS
 
-- [ ] The UI provides a coherent launcher, desktop, windows/workspaces, Files, Editor, Terminal, Browser, Settings/Control Centre, notifications, clipboard, software, and capture experience.
-- [ ] Every meaningful UI operation is backed by a discoverable semantic action.
-- [ ] At least three ten-action tasks work from multiple initial states.
+- [x] The UI provides a coherent launcher, desktop, windows/workspaces, Files, Editor, Terminal, Browser, Settings/Control Centre, notifications, clipboard, software, and capture experience.
+- [x] Every meaningful UI operation is backed by a discoverable semantic action.
+- [x] At least three ten-action tasks work from multiple initial states.
 - [x] At least one ten-action task recovers from injected stochastic failures.
-- [ ] No policy or specialist directly mutates the environment.
+- [x] No policy or specialist directly mutates the environment.
 - [x] Training never runs against destructive live actions.
-- [ ] Every executed action is logged, verified, cancelable, and bounded by safety policy.
-- [ ] Deterministic tasks have BFS/A* baselines and RL is justified by measured uncertainty or reuse.
+- [x] Every executed action is logged, verified, cancelable, and bounded by safety policy.
+- [x] Deterministic tasks have BFS/A* baselines and RL is justified by measured uncertainty or reuse.
 - [x] Routine learned-policy inference completes locally without an LLM call.

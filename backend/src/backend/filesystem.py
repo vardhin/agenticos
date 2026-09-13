@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
@@ -260,3 +261,91 @@ class VirtualFilesystem:
                 raise HTTPException(409, "Restore conflicts with an existing item") from error
             updated = connection.execute("SELECT * FROM file_nodes WHERE id = ?", (node_id,)).fetchone()
             return self.serialize(connection, updated)
+
+    def copy(self, node_id: int, parent_path: str) -> dict[str, Any]:
+        with self.database.transaction() as connection:
+            source = connection.execute(
+                "SELECT * FROM file_nodes WHERE id = ? AND deleted_at IS NULL", (node_id,)
+            ).fetchone()
+            if source is None or source["parent_id"] is None:
+                raise HTTPException(404, "File not found")
+            parent = self.resolve(connection, parent_path)
+            if parent["kind"] != "folder":
+                raise HTTPException(400, "Destination is not a folder")
+
+            def duplicate(row: sqlite3.Row, parent_id: int, name: str | None = None) -> int:
+                try:
+                    copied_id = int(connection.execute(
+                        """INSERT INTO file_nodes(parent_id, name, kind, mime_type, content, size, starred)
+                           VALUES(?, ?, ?, ?, ?, ?, ?)""",
+                        (parent_id, name or row["name"], row["kind"], row["mime_type"], row["content"], row["size"], row["starred"]),
+                    ).lastrowid)
+                except sqlite3.IntegrityError as error:
+                    raise HTTPException(409, "An item with that name already exists") from error
+                if row["kind"] == "folder":
+                    children = connection.execute(
+                        "SELECT * FROM file_nodes WHERE parent_id = ? AND deleted_at IS NULL", (row["id"],)
+                    ).fetchall()
+                    for child in children:
+                        duplicate(child, copied_id)
+                return copied_id
+
+            copy_name = source["name"]
+            if parent["id"] == source["parent_id"]:
+                stem, dot, suffix = copy_name.rpartition(".")
+                copy_name = f"{stem or suffix} copy{dot}{suffix if dot else ''}"
+            copied_id = duplicate(source, parent["id"], copy_name)
+            copied = connection.execute("SELECT * FROM file_nodes WHERE id = ?", (copied_id,)).fetchone()
+            return self.serialize(connection, copied)
+
+    def delete_permanently(self, node_id: int) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM file_nodes WHERE id = ?", (node_id,)).fetchone()
+            if row is None or row["parent_id"] is None:
+                raise HTTPException(404, "File not found")
+            if row["deleted_at"] is None:
+                raise HTTPException(409, "Only trashed items can be deleted permanently")
+            connection.execute("DELETE FROM file_nodes WHERE id = ?", (node_id,))
+
+    def empty_trash(self) -> int:
+        with self.database.transaction() as connection:
+            roots = connection.execute(
+                """SELECT node.id FROM file_nodes node
+                   LEFT JOIN file_nodes parent ON parent.id = node.parent_id
+                   WHERE node.deleted_at IS NOT NULL
+                     AND (parent.id IS NULL OR parent.deleted_at IS NULL)"""
+            ).fetchall()
+            for row in roots:
+                connection.execute("DELETE FROM file_nodes WHERE id = ?", (row["id"],))
+            return len(roots)
+
+    def compress(self, node_ids: list[int], parent_path: str, name: str) -> dict[str, Any]:
+        archive_name = name if name.casefold().endswith(".zip") else f"{name}.zip"
+        entries = [self.get(node_id) for node_id in node_ids]
+        return self.create(FileCreate(
+            parent_path=parent_path,
+            name=archive_name,
+            kind="archive",
+            mime_type="application/zip",
+            content=json.dumps({"format": "agentos-archive-v1", "entries": entries}),
+        ))
+
+    def extract(self, node_id: int, destination: str) -> list[dict[str, Any]]:
+        archive = self.get(node_id, include_content=True)
+        if archive["kind"] != "archive":
+            raise HTTPException(400, "Item is not an archive")
+        try:
+            entries = json.loads(archive.get("content") or "{}").get("entries", [])
+        except (json.JSONDecodeError, AttributeError) as error:
+            raise HTTPException(400, "Archive metadata is invalid") from error
+        created: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            created.append(self.create(FileCreate(
+                parent_path=destination,
+                name=entry["name"],
+                kind=entry.get("kind", "file"),
+                mime_type=entry.get("mime_type"),
+            )))
+        return created

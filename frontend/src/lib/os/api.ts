@@ -86,6 +86,61 @@ export interface AgentTaskResult {
 		observed_failures: number;
 		replans: number;
 	};
+	timeline?: LoopEvent[];
+	duration_ms?: number;
+}
+
+export interface LoopEvent {
+	sequence: number;
+	phase: 'observe' | 'propose' | 'validate' | 'act' | 'verify' | 'recover';
+	action: string | null;
+	state_hash: string | null;
+	status: string;
+	detail: string;
+}
+
+export interface ActionSpec {
+	id: string;
+	description: string;
+	arguments: Record<string, { type: string; required: boolean; description: string }>;
+	preconditions: Array<{ field: string; operator: string; value: unknown }>;
+	postconditions: Array<{ field: string; operator: string; value: unknown }>;
+	effects: Array<{ field: string; operation: string; value: unknown }>;
+	cost: number;
+	latency: string;
+	risk: 'low' | 'medium' | 'high';
+	reversible: boolean;
+	confirmation_required: boolean;
+}
+
+export interface TaskPreview {
+	source: string;
+	expression: { operator: string; arguments?: unknown[]; text?: string };
+	parameters: Record<string, unknown>;
+	supported: boolean;
+	task_id: string | null;
+	milestones: Array<{
+		id: string;
+		description: string;
+		mode: 'all' | 'any';
+		goals: Array<{ id: string; predicate: { field: string; operator: string; value: unknown } }>;
+	}>;
+	constraints: Record<string, unknown>;
+}
+
+export interface AgentMetrics {
+	tasks: number;
+	success_rate: number;
+	training_time_ms: number;
+	inference_time_ms: number;
+	environment_steps: number;
+	unnecessary_actions: number;
+	recovery_rate: number;
+	policy_cache_hit_rate: number;
+	planner_vs_rl: { bfs_steps: number; astar_steps: number; rl_steps: number };
+	live_simulator_divergence: number;
+	llm_escalation_frequency: number;
+	llm_cost: number;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -158,14 +213,69 @@ export const osApi = {
 	restoreFile(id: number): Promise<FileEntry> {
 		return request(`/files/${id}/restore`, { method: 'POST' });
 	},
+	copyFile(id: number, parentPath: string): Promise<FileEntry> {
+		return request(`/files/${id}/copy`, {
+			method: 'POST',
+			body: JSON.stringify({ parent_path: parentPath })
+		});
+	},
+	deleteFilePermanently(id: number): Promise<void> {
+		return request(`/files/${id}/permanent`, { method: 'DELETE' });
+	},
+	emptyTrash(): Promise<{ deleted: number }> {
+		return request('/files/trash/all', { method: 'DELETE' });
+	},
+	createArchive(nodeIds: number[], parentPath: string, name: string): Promise<FileEntry> {
+		return request('/files/archive', {
+			method: 'POST',
+			body: JSON.stringify({ node_ids: nodeIds, parent_path: parentPath, name })
+		});
+	},
+	extractArchive(id: number, destination: string): Promise<{ items: FileEntry[] }> {
+		return request(`/files/${id}/extract`, {
+			method: 'POST',
+			body: JSON.stringify({ destination })
+		});
+	},
 	commandStream(): EventSource {
 		return new EventSource(`${API_BASE}/control`);
 	},
 	sendCommand(command: OSCommand): Promise<unknown> {
 		return request('/control', { method: 'POST', body: JSON.stringify(command) });
 	},
-	runAgentTask(command: string): Promise<AgentTaskResult> {
-		return request('/agent/tasks', { method: 'POST', body: JSON.stringify({ command }) });
+	runAgentTask(command: string, signal?: AbortSignal): Promise<AgentTaskResult> {
+		return request('/agent/tasks', { method: 'POST', body: JSON.stringify({ command }), signal });
+	},
+	previewTask(command: string): Promise<TaskPreview> {
+		return request('/agent/preview', { method: 'POST', body: JSON.stringify({ command }) });
+	},
+	async loadActions(): Promise<ActionSpec[]> {
+		return (await request<{ items: ActionSpec[] }>('/actions')).items;
+	},
+	executeAction(
+		actionId: string,
+		args: Record<string, unknown> = {},
+		confirmed = false
+	): Promise<Record<string, unknown>> {
+		return request(`/actions/${encodeURIComponent(actionId)}/execute`, {
+			method: 'POST',
+			body: JSON.stringify({ args, confirmed })
+		});
+	},
+	loadMetrics(): Promise<AgentMetrics> {
+		return request('/agent/metrics');
+	},
+	async listPolicies(): Promise<Array<Record<string, unknown>>> {
+		return (await request<{ items: Array<Record<string, unknown>> }>('/agent/policies')).items;
+	},
+	loadPolicy(cacheKey: string): Promise<Record<string, unknown>> {
+		return request(`/agent/policies/${encodeURIComponent(cacheKey)}`);
+	},
+	cancelTask(taskId: string): Promise<unknown> {
+		return request(`/agent/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' });
+	},
+	rollbackTask(taskId: string): Promise<unknown> {
+		return request(`/agent/tasks/${encodeURIComponent(taskId)}/rollback`, { method: 'POST' });
 	}
 };
 

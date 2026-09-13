@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
+	import {
+		formatFileMeta,
+		osApi,
+		type ActionSpec,
+		type AgentMetrics,
+		type AgentTaskResult,
+		type FileEntry,
+		type TaskPreview
+	} from '$lib/os/api';
 	import {
 		runClipboardReportTask,
 		runDownloadArchiveTask,
@@ -49,6 +57,38 @@
 	let intentError = $state<string | null>(null);
 	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
 	let taskSearchResult: FileEntry | null = null;
+	let fileSort = $state<'name' | 'size' | 'updated_at'>('name');
+	let fileSortDirection = $state<'ascending' | 'descending'>('ascending');
+	let fileFilter = $state<'all' | FileEntry['kind']>('all');
+	let editorFind = $state('');
+	let editorReplacement = $state('');
+	let showEditorFind = $state(false);
+	let editorTabs = $state<Array<{ id: string; name: string }>>([
+		{ id: 'initial', name: 'desktop-actions-notes.txt' }
+	]);
+	let activeEditorTab = $state('initial');
+	let terminalRunning = $state(false);
+	let browserTabs = $state<Array<{ id: number; title: string; url: string }>>([
+		{ id: 1, title: 'Example', url: 'https://example.com' }
+	]);
+	let activeBrowserTab = $state(1);
+	let browserBookmarks = $state<string[]>([]);
+	let browserDownloads = $state<string[]>([]);
+	let searchCategory = $state<'All' | 'Applications' | 'Files' | 'Settings' | 'Actions' | 'Recent'>(
+		'All'
+	);
+	let taskPreview = $state<TaskPreview | null>(null);
+	let previewError = $state<string | null>(null);
+	let previewTimer: ReturnType<typeof setTimeout> | undefined;
+	let activeAbort: AbortController | null = null;
+	let lastIntentCommand = $state('');
+	let actionSpecs = $state<ActionSpec[]>([]);
+	let selectedActionId = $state<string | null>(null);
+	let policies = $state<Array<Record<string, unknown>>>([]);
+	let policyDetail = $state<Record<string, unknown> | null>(null);
+	let agentMetrics = $state<AgentMetrics | null>(null);
+	let pendingPowerAction = $state<'logout' | 'restart' | 'shutdown' | null>(null);
+	let taskStartEventCount = $state(0);
 
 	runtime.registerHandler('window.editor.new', async () => {
 		await newDocument(false);
@@ -409,7 +449,16 @@
 		}
 	]);
 	const visibleFiles = $derived(
-		files.filter((file) => file.name.toLowerCase().includes(fileSearch.toLowerCase()))
+		files
+			.filter((file) => file.name.toLowerCase().includes(fileSearch.toLowerCase()))
+			.filter((file) => fileFilter === 'all' || file.kind === fileFilter)
+			.sort((left, right) => {
+				const comparison =
+					fileSort === 'size'
+						? left.size - right.size
+						: String(left[fileSort]).localeCompare(String(right[fileSort]));
+				return fileSortDirection === 'ascending' ? comparison : -comparison;
+			})
 	);
 	const selectedFile = $derived(files.find((file) => file.id === selectedFileId) ?? null);
 	const software = [
@@ -459,10 +508,52 @@
 				.includes($osState.inspectorQuery.toLowerCase())
 		)
 	);
+	const filteredActions = $derived(
+		actionSpecs.filter((action) =>
+			`${action.id} ${action.description}`
+				.toLowerCase()
+				.includes($osState.inspectorQuery.toLowerCase())
+		)
+	);
+	const selectedAction = $derived(
+		actionSpecs.find((action) => action.id === selectedActionId) ?? null
+	);
+
+	function scheduleTaskPreview(command: string) {
+		taskPreview = null;
+		previewError = null;
+		if (previewTimer) clearTimeout(previewTimer);
+		if (!command.trim() || !backendOnline) return;
+		previewTimer = setTimeout(async () => {
+			try {
+				taskPreview = await osApi.previewTask(command.trim());
+			} catch (error) {
+				previewError = error instanceof Error ? error.message : String(error);
+			}
+		}, 180);
+	}
+
+	async function loadInspectionData() {
+		if (!backendOnline) return;
+		try {
+			[actionSpecs, policies, agentMetrics] = await Promise.all([
+				osApi.loadActions(),
+				osApi.listPolicies(),
+				osApi.loadMetrics()
+			]);
+			selectedActionId ??= actionSpecs[0]?.id ?? null;
+		} catch {
+			// Inspector keeps its local graph and event stream while the backend reconnects.
+		}
+	}
 
 	async function submitLauncherIntent() {
 		const command = $osState.menuSearch.trim();
 		if (!command || intentRunning) return;
+		lastIntentCommand = command;
+		runtime.beginTask();
+		taskStartEventCount = $osEvents.length;
+		activeAbort = new AbortController();
 		intentRunning = true;
 		intentResult = null;
 		intentError = null;
@@ -516,7 +607,7 @@
 					intentError = learnedResult.error ?? 'The learned policy did not reach its goal';
 				return;
 			}
-			const result = await osApi.runAgentTask(command);
+			const result = await osApi.runAgentTask(command, activeAbort.signal);
 			intentResult = result;
 			runtime.applyWifiObservation(result.final_state);
 			for (const execution of result.executions) {
@@ -531,7 +622,28 @@
 			intentError = error instanceof Error ? error.message : String(error);
 		} finally {
 			intentRunning = false;
+			activeAbort = null;
+			void loadInspectionData();
 		}
+	}
+
+	async function cancelIntent() {
+		runtime.cancelTask();
+		activeAbort?.abort();
+		if (taskPreview?.task_id) await osApi.cancelTask(taskPreview.task_id).catch(() => undefined);
+		intentRunning = false;
+		intentError = 'Task cancelled between actions';
+	}
+
+	async function retryIntent() {
+		if (!lastIntentCommand || intentRunning) return;
+		await runtime.dispatch({ node: 'menu.search', input: lastIntentCommand });
+		await submitLauncherIntent();
+	}
+
+	async function rollbackIntent() {
+		await runtime.dispatch('system.undo_last', 'human');
+		if (taskPreview?.task_id) await osApi.rollbackTask(taskPreview.task_id).catch(() => undefined);
 	}
 
 	onMount(() => {
@@ -547,11 +659,13 @@
 		});
 		void runtime.initialize().then((connected) => {
 			backendOnline = connected;
+			terminalDirectory = localStorage.getItem('agentos.terminal.cwd') ?? 'Home';
 			resetEditorHistory(runtime.snapshot().editorText);
 			if (!connected) return;
 			loadedPath = runtime.snapshot().filesPath;
 			void loadFiles(loadedPath);
 			void linkInitialDocument();
+			void loadInspectionData();
 			backendStream = osApi.commandStream();
 			backendStream.addEventListener(
 				'command',
@@ -591,6 +705,16 @@
 			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
 				event.preventDefault();
 				void newDocument();
+			}
+			if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+				event.preventDefault();
+				if ($osState.focusedWindow === 'editor') showEditorFind = true;
+			}
+			if (event.altKey && /^Digit[1-4]$/.test(event.code)) {
+				event.preventDefault();
+				const workspace = Number(event.code.slice(-1));
+				if (workspace <= $osState.workspaceCount)
+					void runtime.dispatch({ node: 'workspace.switch', input: workspace });
 			}
 			if (event.key === 'Escape' && $osState.overlay)
 				void runtime.dispatch(
@@ -668,6 +792,30 @@
 				command = { node: raw };
 			}
 		}
+		if (
+			!runtime.graph.some((node) => node.id === command.node) &&
+			actionSpecs.some((action) => action.id === command.node)
+		) {
+			const spec = actionSpecs.find((action) => action.id === command.node)!;
+			const args =
+				typeof command.input === 'object' && command.input !== null
+					? (command.input as Record<string, unknown>)
+					: {};
+			const confirmed =
+				!spec.confirmation_required || window.confirm(`Confirm ${spec.id}? ${spec.description}`);
+			if (!confirmed) return;
+			try {
+				const result = await osApi.executeAction(spec.id, args, confirmed);
+				runtime.recordObservedAction(spec.id, 'ok', String(result.message ?? 'Action verified'));
+			} catch (error) {
+				runtime.recordObservedAction(
+					spec.id,
+					'error',
+					error instanceof Error ? error.message : String(error)
+				);
+			}
+			return;
+		}
 		await runtime.dispatch(command, 'human');
 	}
 
@@ -730,6 +878,10 @@
 			activeFileId = loaded.id;
 			activeFileName = loaded.name;
 			activeFileDirectory = loaded.path.slice(0, -(loaded.name.length + 1));
+			const tabId = `file-${loaded.id}`;
+			if (!editorTabs.some((tab) => tab.id === tabId))
+				editorTabs = [...editorTabs, { id: tabId, name: loaded.name }];
+			activeEditorTab = tabId;
 			await runtime.dispatch({ node: 'window.editor.text', input: loaded.content ?? '' });
 			documentDirty = false;
 			resetEditorHistory(loaded.content ?? '');
@@ -789,6 +941,9 @@
 		activeFileId = null;
 		activeFileName = 'Untitled.txt';
 		activeFileDirectory = 'Documents';
+		const tabId = `untitled-${Date.now()}`;
+		editorTabs = [...editorTabs, { id: tabId, name: 'Untitled.txt' }];
+		activeEditorTab = tabId;
 		runtime.setEditorText('');
 		documentDirty = false;
 		resetEditorHistory('');
@@ -947,11 +1102,13 @@
 		terminalHistory = [...terminalHistory, raw];
 		terminalHistoryIndex = terminalHistory.length;
 		terminalInput = '';
+		terminalRunning = true;
 		const output: string[] = [`researcher@agentos:${terminalDirectory}$ ${raw}`];
 		const [command, ...args] = raw.split(/\s+/);
 		try {
 			if (command === 'clear') {
 				terminalLines = [];
+				terminalRunning = false;
 				return;
 			} else if (command === 'help') {
 				output.push('Commands: help, pwd, ls, cd, cat, touch, mkdir, echo, history, clear');
@@ -972,6 +1129,7 @@
 				const destination = args.join(' ') || 'Home';
 				await osApi.listFiles(destination);
 				terminalDirectory = destination;
+				localStorage.setItem('agentos.terminal.cwd', destination);
 			} else if (command === 'cat') {
 				const entries = await osApi.listFiles(terminalDirectory);
 				const file = entries.find((item) => item.name === args.join(' '));
@@ -992,6 +1150,7 @@
 			output.push(error instanceof Error ? error.message : String(error));
 		}
 		terminalLines = [...terminalLines, ...output];
+		terminalRunning = false;
 		if (logAction) await runtime.dispatch({ node: 'files.action', input: `Terminal: ${raw}` });
 	}
 
@@ -1015,6 +1174,9 @@
 		const url = normalizeBrowserUrl(value);
 		browserUrl = url;
 		browserInput = url;
+		browserTabs = browserTabs.map((tab) =>
+			tab.id === activeBrowserTab ? { ...tab, title: new URL(url).hostname || 'New tab', url } : tab
+		);
 		if (trackHistory && browserHistory[browserHistoryIndex] !== url) {
 			browserHistory = [...browserHistory.slice(0, browserHistoryIndex + 1), url];
 			browserHistoryIndex = browserHistory.length - 1;
@@ -1026,6 +1188,160 @@
 		if (next < 0 || next >= browserHistory.length) return;
 		browserHistoryIndex = next;
 		navigateBrowser(browserHistory[next], false);
+	}
+
+	function findInEditor() {
+		if (!editorFind) return;
+		const textarea = document.querySelector<HTMLTextAreaElement>('[aria-label="Document text"]');
+		if (!textarea) return;
+		const start = $osState.editorText.toLocaleLowerCase().indexOf(editorFind.toLocaleLowerCase());
+		if (start < 0)
+			return void runtime.recordObservedAction('editor.find', 'error', 'Text not found');
+		textarea.focus();
+		textarea.setSelectionRange(start, start + editorFind.length);
+		runtime.recordObservedAction('editor.find', 'ok', `Found “${editorFind}”`);
+	}
+
+	function replaceInEditor(all = false) {
+		if (!editorFind) return;
+		const next = all
+			? $osState.editorText.replaceAll(editorFind, editorReplacement)
+			: $osState.editorText.replace(editorFind, editorReplacement);
+		editDocument(next);
+		runtime.recordObservedAction(
+			'editor.replace',
+			'ok',
+			all ? 'Replaced all matches' : 'Replaced match'
+		);
+	}
+
+	async function closeEditorTab(tabId: string) {
+		if (
+			tabId === activeEditorTab &&
+			documentDirty &&
+			!window.confirm(`Discard unsaved changes to ${activeFileName}?`)
+		)
+			return;
+		editorTabs = editorTabs.filter((tab) => tab.id !== tabId);
+		if (!editorTabs.length) await newDocument(false);
+		activeEditorTab = editorTabs.at(-1)?.id ?? 'initial';
+	}
+
+	async function copySelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const destination = window.prompt('Copy to folder', $osState.filesPath)?.trim();
+		if (!destination) return;
+		await osApi.copyFile(selectedFile.id, destination);
+		await loadFiles();
+		await runtime.dispatch({
+			node: 'files.action',
+			input: `Copied ${selectedFile.name} to ${destination}`
+		});
+	}
+
+	async function moveSelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const destination = window.prompt('Move to folder', 'Documents')?.trim();
+		if (!destination) return;
+		await osApi.updateFile(selectedFile.id, { parent_path: destination });
+		await loadFiles();
+		await runtime.dispatch({
+			node: 'files.action',
+			input: `Moved ${selectedFile.name} to ${destination}`
+		});
+	}
+
+	async function archiveSelected() {
+		if (!selectedFile || selectedFile.id < 0) return;
+		const name = window.prompt('Archive name', `${selectedFile.name}.zip`)?.trim();
+		if (!name) return;
+		await osApi.createArchive([selectedFile.id], $osState.filesPath, name);
+		await loadFiles();
+		await runtime.dispatch({ node: 'files.action', input: `Archived ${selectedFile.name}` });
+	}
+
+	async function extractSelected() {
+		if (!selectedFile || selectedFile.kind !== 'archive') return;
+		await osApi.extractArchive(selectedFile.id, $osState.filesPath);
+		await loadFiles();
+		await runtime.dispatch({ node: 'files.action', input: `Extracted ${selectedFile.name}` });
+	}
+
+	async function openWithSelected(app: WindowName) {
+		if (!selectedFile) return;
+		await runtime.dispatch(`menu.${app}.open`);
+		await runtime.dispatch({ node: 'open_with.open', input: { node: selectedFile.id, app } });
+	}
+
+	async function permanentlyDeleteSelected() {
+		if (
+			!selectedFile ||
+			!window.confirm(`Permanently delete ${selectedFile.name}? This cannot be undone.`)
+		)
+			return;
+		await osApi.deleteFilePermanently(selectedFile.id);
+		await loadFiles();
+	}
+
+	function interruptTerminal() {
+		terminalRunning = false;
+		terminalLines = [...terminalLines, '^C'];
+		runtime.recordObservedAction('terminal.interrupt', 'ok', 'Command interrupted');
+	}
+
+	async function copyTerminalOutput() {
+		await navigator.clipboard?.writeText(terminalLines.join('\n')).catch(() => undefined);
+		await runtime.dispatch({ node: 'clipboard.copy', input: terminalLines.join('\n') });
+	}
+
+	function newBrowserTab() {
+		const id = Math.max(0, ...browserTabs.map((tab) => tab.id)) + 1;
+		browserTabs = [...browserTabs, { id, title: 'New tab', url: 'https://example.com' }];
+		activeBrowserTab = id;
+		navigateBrowser('https://example.com');
+		runtime.recordObservedAction('browser.new_tab', 'ok', `Opened tab ${id}`);
+	}
+
+	function closeBrowserTab(id: number) {
+		browserTabs = browserTabs.filter((tab) => tab.id !== id);
+		if (!browserTabs.length) return newBrowserTab();
+		if (activeBrowserTab === id) activeBrowserTab = browserTabs[0].id;
+		const active = browserTabs.find((tab) => tab.id === activeBrowserTab)!;
+		navigateBrowser(active.url, false);
+		runtime.recordObservedAction('browser.close_tab', 'ok', `Closed tab ${id}`);
+	}
+
+	function switchBrowserTab(id: number) {
+		const tab = browserTabs.find((item) => item.id === id);
+		if (!tab) return;
+		activeBrowserTab = id;
+		navigateBrowser(tab.url, false);
+		runtime.recordObservedAction('browser.switch_tab', 'ok', `Switched to tab ${id}`);
+	}
+
+	function bookmarkPage() {
+		if (!browserBookmarks.includes(browserUrl))
+			browserBookmarks = [...browserBookmarks, browserUrl];
+		runtime.recordObservedAction('browser.bookmark', 'ok', `Bookmarked ${browserUrl}`);
+	}
+
+	async function editorSelection(action: 'copy' | 'cut' | 'delete') {
+		const textarea = document.querySelector<HTMLTextAreaElement>('[aria-label="Document text"]');
+		if (!textarea || textarea.selectionStart === textarea.selectionEnd) return;
+		const selected = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+		if (action !== 'delete') await navigator.clipboard?.writeText(selected).catch(() => undefined);
+		if (action !== 'copy')
+			editDocument(
+				`${textarea.value.slice(0, textarea.selectionStart)}${textarea.value.slice(textarea.selectionEnd)}`
+			);
+		runtime.recordObservedAction(`editor.${action}_selection`, 'ok', `${action} selection`);
+	}
+
+	async function confirmPowerAction() {
+		if (!pendingPowerAction) return;
+		const action = pendingPowerAction;
+		pendingPowerAction = null;
+		await runtime.dispatch(`system.${action}`);
 	}
 </script>
 
@@ -1042,6 +1358,14 @@
 	aria-label="AgentOS desktop"
 	style={`--screen-brightness:${$osState.brightness}%`}
 >
+	{#if $osState.sessionLocked}
+		<section class="lock-screen" aria-label="Lock screen">
+			<time>{clock.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+			<h1>Researcher</h1>
+			<p>Session locked</p>
+			<button onclick={() => runtime.dispatch('system.unlock')}>Unlock</button>
+		</section>
+	{/if}
 	<section class="desktop-icons" aria-label="Desktop items">
 		{#each desktopIcons as item (item.id)}
 			<button
@@ -1093,7 +1417,8 @@
 						class="close"
 						onclick={(event) => {
 							event.stopPropagation();
-							runtime.dispatch('window.editor.close');
+							if (!documentDirty || window.confirm(`Discard unsaved changes to ${activeFileName}?`))
+								runtime.dispatch('window.editor.close');
 						}}
 						aria-label="Close Text Editor"
 						><img src="/assets/icons/window-close.svg" alt="" /></button
@@ -1103,8 +1428,9 @@
 			<nav class="menubar" aria-label="Editor menus">
 				<button onclick={() => newDocument()}>File</button><button onclick={undoDocument}
 					>Edit</button
-				><button>View</button><button>Search</button><button>Tools</button><button>Documents</button
-				><button>Help</button>
+				><button>View</button><button onclick={() => (showEditorFind = !showEditorFind)}
+					>Search</button
+				><button>Tools</button><button>Documents</button><button>Help</button>
 			</nav>
 			<div class="toolbar" aria-label="Editor toolbar">
 				<button title="New document" aria-label="New document" onclick={() => newDocument()}
@@ -1113,6 +1439,12 @@
 					><img src="/assets/icons/document-save.svg" alt="" /></button
 				><button class="save-as-button" title="Save document as" onclick={() => saveDocumentAs()}
 					>Save As</button
+				><span class="tool-separator"></span><button
+					title="Copy selection"
+					onclick={() => editorSelection('copy')}>Copy</button
+				><button title="Cut selection" onclick={() => editorSelection('cut')}>Cut</button><button
+					title="Delete selection"
+					onclick={() => editorSelection('delete')}>Delete</button
 				><span class="tool-separator"></span><button
 					title="Undo"
 					aria-label="Undo"
@@ -1131,13 +1463,48 @@
 					alt=""
 				/><span class="tool-separator"></span><span class="format-label">Spaces: 4</span>
 			</div>
-			<div class="document-tab">
-				<img src="/assets/icons/editor.svg" alt="" /><span
-					>{documentDirty ? '● ' : ''}{activeFileName}</span
-				><button aria-label="Close tab" onclick={() => newDocument()}
-					><img src="/assets/icons/window-close.svg" alt="" /></button
-				>
+			<div class="document-tabs">
+				{#each editorTabs as tab (tab.id)}<button
+						class:active={activeEditorTab === tab.id}
+						onclick={() => (activeEditorTab = tab.id)}
+						><img src="/assets/icons/editor.svg" alt="" /><span
+							>{activeEditorTab === tab.id && documentDirty ? '● ' : ''}{tab.id === activeEditorTab
+								? activeFileName
+								: tab.name}</span
+						><i
+							role="button"
+							tabindex="0"
+							aria-label={`Close ${tab.name}`}
+							onclick={(event) => {
+								event.stopPropagation();
+								void closeEditorTab(tab.id);
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Enter' || event.key === ' ') void closeEditorTab(tab.id);
+							}}>×</i
+						></button
+					>{/each}
 			</div>
+			{#if showEditorFind}<form
+					class="find-bar"
+					onsubmit={(event) => {
+						event.preventDefault();
+						findInEditor();
+					}}
+				>
+					<input aria-label="Find text" placeholder="Find" bind:value={editorFind} /><input
+						aria-label="Replacement text"
+						placeholder="Replace with"
+						bind:value={editorReplacement}
+					/><button type="submit">Find</button><button
+						type="button"
+						onclick={() => replaceInEditor(false)}>Replace</button
+					><button type="button" onclick={() => replaceInEditor(true)}>All</button><button
+						type="button"
+						aria-label="Close find"
+						onclick={() => (showEditorFind = false)}>×</button
+					>
+				</form>{/if}
 			<div class="editor-body">
 				<div class="line-numbers" aria-hidden="true">
 					{#each Array.from({ length: Math.max(1, $osState.editorText.split('\n').length) }, (_, index) => index + 1) as line (line)}<span
@@ -1204,7 +1571,7 @@
 				</div>
 			</header>
 			<nav class="inspector-tabs" aria-label="Inspector sections">
-				{#each ['events', 'nodes', 'state', 'settings'] as tab (tab)}<button
+				{#each ['events', 'nodes', 'actions', 'task', 'policy', 'state', 'settings'] as tab (tab)}<button
 						class:active={$osState.inspectorTab === tab}
 						onclick={() => runtime.dispatch(`window.inspector.tab.${tab}`)}
 						>{tab[0].toUpperCase() + tab.slice(1)}</button
@@ -1236,6 +1603,102 @@
 						{#each filteredNodes as node (node.id)}<button onclick={() => (invokeValue = node.id)}
 								><span>{node.id}</span><small>{node.kind} · {node.description}</small></button
 							>{/each}
+					</div>
+				{:else if $osState.inspectorTab === 'actions'}
+					<div class="action-inspector">
+						<div class="node-list">
+							{#each filteredActions as action (action.id)}<button
+									class:active={selectedActionId === action.id}
+									onclick={() => (selectedActionId = action.id)}
+									><span>{action.id}</span><small>{action.risk} risk · cost {action.cost}</small
+									></button
+								>{/each}
+						</div>
+						{#if selectedAction}<dl class="contract-view">
+								<dt>Description</dt>
+								<dd>{selectedAction.description}</dd>
+								<dt>Preconditions</dt>
+								<dd><code>{JSON.stringify(selectedAction.preconditions)}</code></dd>
+								<dt>Effects</dt>
+								<dd><code>{JSON.stringify(selectedAction.effects)}</code></dd>
+								<dt>Postconditions</dt>
+								<dd><code>{JSON.stringify(selectedAction.postconditions)}</code></dd>
+								<dt>Safety</dt>
+								<dd>
+									{selectedAction.risk} risk · {selectedAction.reversible
+										? 'reversible'
+										: 'irreversible'}{selectedAction.confirmation_required
+										? ' · confirmation required'
+										: ''}
+								</dd>
+							</dl>{/if}
+					</div>
+				{:else if $osState.inspectorTab === 'task'}
+					<div class="task-inspector">
+						<h3>Task automaton</h3>
+						{#if taskPreview?.milestones.length}
+							<ol class="automaton-view">
+								{#each taskPreview.milestones as milestone, index (milestone.id)}<li
+										class:complete={Boolean(intentResult && index < intentResult.executions.length)}
+									>
+										<span>{index + 1}</span>
+										<div>
+											<strong>{milestone.id}</strong><small
+												>{milestone.goals.map((goal) => goal.predicate.field).join(' · ')}</small
+											>
+										</div>
+									</li>{/each}
+							</ol>
+						{:else}<p class="empty-state">
+								Enter a supported task in the launcher to inspect its automaton.
+							</p>{/if}
+						<h3>Control loop timeline</h3>
+						{#if intentResult && 'timeline' in intentResult && intentResult.timeline?.length}
+							<div class="timeline-view">
+								{#each intentResult.timeline as item (item.sequence)}<article>
+										<b>{item.phase}</b><code>{item.action ?? 'state'}</code><span
+											>{item.status}</span
+										>
+									</article>{/each}
+							</div>
+						{:else if intentResult}<div class="timeline-view">
+								{#each intentResult.executions as execution, index (index)}<article>
+										<b>{index === 0 ? 'observe' : 'verify'}</b><code>{execution.action}</code><span
+											>{execution.status}</span
+										>
+									</article>{/each}
+							</div>
+						{:else}<p class="empty-state">No task has run in this session.</p>{/if}
+					</div>
+				{:else if $osState.inspectorTab === 'policy'}
+					<div class="policy-inspector">
+						<div class="metric-grid">
+							<span
+								><strong>{Math.round((agentMetrics?.success_rate ?? 0) * 100)}%</strong> success</span
+							>
+							<span><strong>{agentMetrics?.environment_steps ?? 0}</strong> steps</span>
+							<span
+								><strong>{Math.round((agentMetrics?.policy_cache_hit_rate ?? 0) * 100)}%</strong> cache
+								hits</span
+							>
+							<span><strong>{agentMetrics?.recovery_rate ?? 0}</strong> recovery</span>
+						</div>
+						<h3>Learned policies</h3>
+						{#each policies as policy (String(policy.cache_key))}<button
+								class="policy-row"
+								onclick={async () =>
+									(policyDetail = await osApi.loadPolicy(String(policy.cache_key)))}
+								><code>{String(policy.version)}</code><span
+									>{String(policy.states)} states · {String(policy.episodes)} traces</span
+								></button
+							>{/each}
+						{#if policyDetail}<pre class="state-view">{JSON.stringify(
+									policyDetail,
+									null,
+									2
+								)}</pre>{:else if !policies.length}<p class="empty-state">
+								Policies appear here after the first learned task.
+							</p>{/if}
 					</div>
 				{:else if $osState.inspectorTab === 'state'}<pre class="state-view">{JSON.stringify(
 							$osState,
@@ -1344,7 +1807,18 @@
 							onclick={() => openPath(place)}>{place}</button
 						>{/each}
 					<strong>Devices</strong><button onclick={() => openPath('Archive USB')}
-						>Archive USB <small>32 GB</small></button
+						>Archive USB <small
+							>{$osState.mountedDevices.includes('Archive USB') ? '32 GB' : 'Unmounted'}</small
+						></button
+					><button
+						onclick={() =>
+							runtime.dispatch({
+								node: $osState.mountedDevices.includes('Archive USB')
+									? 'filesystem.unmount'
+									: 'filesystem.mount',
+								input: 'Archive USB'
+							})}
+						>{$osState.mountedDevices.includes('Archive USB') ? '⏏ Unmount' : '＋ Mount'}</button
 					>
 				</aside>
 				<div class="files-main">
@@ -1356,7 +1830,28 @@
 									: `${visibleFiles.length} items · sorted by name`}</small
 							>
 						</div>
-						<button aria-label="Grid view">▦</button><button aria-label="Sort files">↕</button>
+						<label class="compact-select"
+							>Sort <select aria-label="Sort files" bind:value={fileSort}
+								><option value="name">Name</option><option value="size">Size</option><option
+									value="updated_at">Modified</option
+								></select
+							></label
+						>
+						<button
+							aria-label="Reverse sort"
+							onclick={() =>
+								(fileSortDirection =
+									fileSortDirection === 'ascending' ? 'descending' : 'ascending')}
+							>{fileSortDirection === 'ascending' ? '↑' : '↓'}</button
+						>
+						<label class="compact-select"
+							>Filter <select aria-label="Filter files" bind:value={fileFilter}
+								><option value="all">All</option><option value="folder">Folders</option><option
+									value="text">Text</option
+								><option value="image">Images</option><option value="archive">Archives</option
+								></select
+							></label
+						>
 					</div>
 					<div class="folder-grid">
 						{#each visibleFiles as file (file.id)}<button
@@ -1379,8 +1874,22 @@
 								onclick={() =>
 									runtime.dispatch({ node: 'clipboard.copy', input: selectedFile.path })}
 								>Share</button
-							><button onclick={renameSelected}>Rename</button
-							>{#if $osState.filesPath === 'Trash'}<button onclick={restoreSelected}>Restore</button
+							><button onclick={copySelected}>Copy</button><button onclick={moveSelected}
+								>Move</button
+							><button onclick={renameSelected}>Rename</button><button onclick={archiveSelected}
+								>Archive</button
+							>
+							{#if selectedFile.kind === 'archive'}<button onclick={extractSelected}>Extract</button
+								>{/if}
+							<details>
+								<summary>Open With</summary><button onclick={() => openWithSelected('editor')}
+									>Text Editor</button
+								><button onclick={() => openWithSelected('browser')}>Browser</button>
+							</details>
+							{#if $osState.filesPath === 'Trash'}<button onclick={restoreSelected}>Restore</button
+								><button class="danger" onclick={permanentlyDeleteSelected}
+									>Delete permanently</button
+								>
 								>{:else}<button onclick={trashSelected}>Trash</button>{/if}
 							>
 						</div>{/if}
@@ -1479,6 +1988,128 @@
 							</div>
 							<input aria-label="Text size" type="range" min="80" max="150" value="100" />
 						</div>
+					{:else if settingsSection === 'Network'}
+						<div class="setting-card">
+							<h2>Wi-Fi</h2>
+							<label class="toggle-row"
+								><span>Wireless networking</span><input
+									type="checkbox"
+									checked={$osState.wifiEnabled}
+									onchange={() => runtime.dispatch('wifi.toggle')}
+								/></label
+							>
+							<p>Connected network: {$osState.connectedNetwork ?? 'None'}</p>
+							<div class="default-row">
+								<span>StudioNet · secured · 82%</span><button
+									onclick={() => runtime.dispatch('wifi.studionet.connect')}>Connect</button
+								>
+							</div>
+							<div class="default-row">
+								<span>PineHouse · secured · 64%</span><button
+									onclick={() => runtime.dispatch('wifi.pinehouse.connect')}>Connect</button
+								>
+							</div>
+						</div>
+					{:else if settingsSection === 'Bluetooth'}
+						<div class="setting-card">
+							<h2>Bluetooth devices</h2>
+							<label class="toggle-row"
+								><span>Bluetooth</span><input
+									type="checkbox"
+									checked={$osState.bluetoothEnabled}
+									onchange={() => runtime.dispatch('control.bluetooth.toggle')}
+								/></label
+							>{#each ['Agent Keyboard', 'Studio Headphones'] as device (device)}<div
+									class="default-row"
+								>
+									<span
+										>{device}<small
+											>{$osState.connectedBluetoothDevice === device
+												? ' Connected'
+												: ' Available'}</small
+										></span
+									><button
+										onclick={() =>
+											runtime.dispatch({ node: 'control.bluetooth.device', input: device })}
+										>{$osState.connectedBluetoothDevice === device
+											? 'Disconnect'
+											: 'Connect'}</button
+									>
+								</div>{/each}
+						</div>
+					{:else if settingsSection === 'Displays'}
+						<div class="setting-card">
+							<h2>Built-in display</h2>
+							<label class="toggle-row"
+								><span>Night light</span><input
+									type="checkbox"
+									checked={$osState.nightLight}
+									onchange={() => runtime.dispatch('control.night-light')}
+								/></label
+							><label class="row-setting"
+								><span>Scale</span><select
+									aria-label="Display scale"
+									value={$osState.displayScale}
+									onchange={(event) =>
+										runtime.dispatch({
+											node: 'control.display-scale',
+											input: event.currentTarget.value
+										})}
+									><option value="100">100%</option><option value="125">125%</option><option
+										value="150">150%</option
+									></select
+								></label
+							><label class="row-setting"
+								><span>Resolution</span><select
+									aria-label="Display resolution"
+									value={$osState.displayResolution}
+									onchange={(event) =>
+										runtime.dispatch({
+											node: 'control.display-resolution',
+											input: event.currentTarget.value
+										})}
+									><option>1920×1080</option><option>1600×900</option><option>1280×720</option
+									></select
+								></label
+							>
+						</div>
+					{:else if settingsSection === 'Sound'}
+						<div class="setting-card">
+							<h2>Devices</h2>
+							<label class="row-setting"
+								><span>Output</span><select
+									aria-label="Audio output"
+									value={$osState.audioOutput}
+									onchange={(event) =>
+										runtime.dispatch({
+											node: 'control.audio-output',
+											input: event.currentTarget.value
+										})}><option>Built-in Speakers</option><option>Studio Headphones</option></select
+								></label
+							><label class="row-setting"
+								><span>Input</span><select
+									aria-label="Audio input"
+									value={$osState.audioInput}
+									onchange={(event) =>
+										runtime.dispatch({
+											node: 'control.audio-input',
+											input: event.currentTarget.value
+										})}><option>Built-in Microphone</option><option>USB Microphone</option></select
+								></label
+							><label class="slider-row"
+								><span>Input gain</span><input
+									type="range"
+									min="0"
+									max="100"
+									value={$osState.inputGain}
+									oninput={(event) =>
+										runtime.dispatch({
+											node: 'control.input-gain',
+											input: event.currentTarget.value
+										})}
+								/><strong>{$osState.inputGain}%</strong></label
+							>
+						</div>
 					{:else if settingsSection === 'Applications'}
 						<div class="setting-card">
 							<h2>Default applications</h2>
@@ -1575,7 +2206,12 @@
 			<nav class="software-tabs">
 				<button class="active">Explore</button><button
 					>Installed <span>{$osState.installedApps.length}</span></button
-				><button>Updates <span>3</span></button>
+				><button
+					onclick={() =>
+						window.confirm('Install all available updates?') &&
+						runtime.recordObservedAction('software.update_all', 'ok', 'All applications updated')}
+					>Updates <span>3</span></button
+				>
 			</nav>
 			<div class="featured-app">
 				<div class="feature-icon">✦</div>
@@ -1597,7 +2233,10 @@
 						</div>
 						<button
 							class:installed={$osState.installedApps.includes(app.name)}
-							onclick={() => runtime.dispatch({ node: 'software.toggle', input: app.name })}
+							onclick={() =>
+								(!$osState.installedApps.includes(app.name) ||
+									window.confirm(`Remove ${app.name}? This may delete application data.`)) &&
+								runtime.dispatch({ node: 'software.toggle', input: app.name })}
 							>{$osState.installedApps.includes(app.name) ? 'Remove' : 'Install'}</button
 						>
 					</article>{/each}
@@ -1645,6 +2284,24 @@
 					>
 				</div>
 			</header>
+			<nav class="browser-tabs" aria-label="Browser tabs">
+				{#each browserTabs as tab (tab.id)}<button
+						class:active={activeBrowserTab === tab.id}
+						onclick={() => switchBrowserTab(tab.id)}
+						><span>{tab.title}</span><i
+							role="button"
+							tabindex="0"
+							aria-label={`Close ${tab.title}`}
+							onclick={(event) => {
+								event.stopPropagation();
+								closeBrowserTab(tab.id);
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Enter' || event.key === ' ') closeBrowserTab(tab.id);
+							}}>×</i
+						></button
+					>{/each}<button aria-label="New browser tab" onclick={newBrowserTab}>＋</button>
+			</nav>
 			<form
 				class="browser-toolbar"
 				onsubmit={(event) => {
@@ -1674,6 +2331,20 @@
 					}}>↻</button
 				>
 				<input aria-label="Address and search bar" bind:value={browserInput} spellcheck="false" />
+				<button
+					type="button"
+					aria-label="Bookmark page"
+					class:active={browserBookmarks.includes(browserUrl)}
+					onclick={bookmarkPage}>☆</button
+				>
+				<button
+					type="button"
+					aria-label="Download page"
+					onclick={async () => {
+						const event = await runtime.dispatch({ node: 'browser.download', input: browserUrl });
+						if (event.result === 'ok') browserDownloads = [...browserDownloads, browserUrl];
+					}}>↓</button
+				>
 				<button type="submit">Go</button>
 			</form>
 			<iframe
@@ -1681,7 +2352,12 @@
 				src={browserUrl}
 				sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
 			></iframe>
-			<footer class="browser-status">{browserUrl}</footer>
+			<footer class="browser-status">
+				<span>{browserUrl}</span><span
+					>{browserHistory.length} history · {browserBookmarks.length} bookmarks · {browserDownloads.length}
+					downloads</span
+				>
+			</footer>
 		</section>
 	{/if}
 
@@ -1725,6 +2401,12 @@
 					>
 				</div>
 			</header>
+			<div class="terminal-actions">
+				<button onclick={copyTerminalOutput}>Copy output</button><button
+					onclick={interruptTerminal}
+					disabled={!terminalRunning}>Interrupt</button
+				><button onclick={() => (terminalLines = [])}>Clear</button><span>{terminalDirectory}</span>
+			</div>
 			<div class="terminal-body">
 				<p>AgentOS 0.4.0 <span>· Arch Linux</span></p>
 				<p>
@@ -1733,7 +2415,7 @@
 						minute: '2-digit'
 					})}
 				</p>
-				<div class="terminal-output" aria-live="polite">
+				<div class="terminal-output" role="log" aria-live="polite" aria-label="Terminal output">
 					{#each terminalLines as line, index (`${index}-${line}`)}<p>{line}</p>{/each}
 				</div>
 				<label
@@ -1773,6 +2455,7 @@
 						intentResult = null;
 						intentError = null;
 						runtime.dispatch({ node: 'menu.search', input: event.currentTarget.value });
+						scheduleTaskPreview(event.currentTarget.value);
 					}}
 					onkeydown={(event) => {
 						if (event.key === 'Enter') {
@@ -1790,10 +2473,19 @@
 					aria-live="polite"
 				>
 					{#if intentRunning}
-						<span class="intent-spinner"></span><strong>Resolving intent…</strong>
+						<span class="intent-spinner"></span>
+						<div>
+							<strong>Running task…</strong><small
+								>{Math.max(0, $osEvents.length - taskStartEventCount)} actions completed</small
+							>
+						</div>
+						<button onclick={cancelIntent}>Cancel</button>
 					{:else if intentError}
 						<span>!</span>
 						<div><strong>Couldn’t complete that</strong><small>{intentError}</small></div>
+						<button onclick={retryIntent}>Retry</button><button onclick={rollbackIntent}
+							>Rollback</button
+						>
 					{:else if intentResult}
 						<span>✓</span>
 						<div>
@@ -1808,48 +2500,95 @@
 									: 's'}</small
 							>
 						</div>
+						<button onclick={retryIntent}>Retry</button><button onclick={rollbackIntent}
+							>Rollback</button
+						>
 					{/if}
 				</div>
 			{/if}
+			{#if taskPreview?.supported && taskPreview.milestones.length && !intentRunning}
+				<details class="task-preview" open>
+					<summary>Task preview · {taskPreview.milestones.length} milestones</summary>
+					<ol>
+						{#each taskPreview.milestones as milestone (milestone.id)}<li>
+								{milestone.description}
+							</li>{/each}
+					</ol>
+					<small>No action has been taken. Press Enter to run.</small>
+				</details>
+			{:else if previewError}<p class="preview-error">{previewError}</p>{/if}
 			<div class="search-layout">
 				<aside>
-					<button class="active">All</button><button>Applications</button><button>Files</button
-					><button>Settings</button><button>Actions</button><span></span><button>Recent</button>
+					{#each ['All', 'Applications', 'Files', 'Settings', 'Actions', 'Recent'] as category (category)}<button
+							class:active={searchCategory === category}
+							onclick={() => (searchCategory = category as typeof searchCategory)}
+							>{category}</button
+						>{/each}
 				</aside>
 				<div class="search-results">
-					<p class="section-label">APPLICATIONS</p>
-					<div class="launcher-apps">
-						{#each filteredApplications as app (app.id)}<button
-								onclick={() => runtime.dispatch(app.id)}
-								><img src={app.icon} alt="" /><span>{app.label}</span><small>{app.note}</small
+					{#if searchCategory === 'All' || searchCategory === 'Applications'}
+						<p class="section-label">APPLICATIONS</p>
+						<div class="launcher-apps">
+							{#each filteredApplications as app (app.id)}<button
+									onclick={() => runtime.dispatch(app.id)}
+									><img src={app.icon} alt="" /><span>{app.label}</span><small>{app.note}</small
+									></button
+								>{/each}
+						</div>
+					{/if}
+					{#if searchCategory === 'All' || searchCategory === 'Files' || searchCategory === 'Recent'}
+						<p class="section-label">RECENT FILES</p>
+						{#each files
+							.filter((file) => file.kind !== 'folder')
+							.filter((file) => file.name
+									.toLowerCase()
+									.includes($osState.menuSearch.toLowerCase())) as file (file.name)}<button
+								class="search-result"
+								onclick={() => {
+									runtime.dispatch('menu.files.open');
+									selectedFileId = file.id;
+								}}
+								><img
+									src={file.kind === 'text'
+										? '/assets/icons/editor.svg'
+										: '/assets/icons/drive.svg'}
+									alt=""
+								/><span
+									><strong>{file.name}</strong><small>{file.path} · {formatFileMeta(file)}</small
+									></span
+								><kbd>↵</kbd></button
+							>{/each}
+					{/if}
+					{#if searchCategory === 'All' || searchCategory === 'Settings'}
+						<p class="section-label">SETTINGS</p>
+						{#each ['Network', 'Bluetooth', 'Displays', 'Sound', 'Appearance', 'Accessibility'] as section (section)}<button
+								class="search-result"
+								onclick={() => {
+									settingsSection = section;
+									void runtime.dispatch('menu.settings.open');
+								}}
+								><span><strong>{section}</strong><small>System setting</small></span><kbd>↵</kbd
 								></button
 							>{/each}
-					</div>
-					<p class="section-label">RECENT FILES</p>
-					{#each files
-						.filter((file) => file.kind !== 'folder')
-						.filter((file) => file.name
-								.toLowerCase()
-								.includes($osState.menuSearch.toLowerCase())) as file (file.name)}<button
-							class="search-result"
-							onclick={() => {
-								runtime.dispatch('menu.files.open');
-								selectedFileId = file.id;
-							}}
-							><img
-								src={file.kind === 'text' ? '/assets/icons/editor.svg' : '/assets/icons/drive.svg'}
-								alt=""
-							/><span
-								><strong>{file.name}</strong><small>{file.path} · {formatFileMeta(file)}</small
-								></span
-							><kbd>↵</kbd></button
-						>{/each}
-					<p class="section-label">QUICK ACTIONS</p>
-					<div class="quick-actions">
-						<button onclick={() => runtime.dispatch('panel.capture')}>▣ Screenshot</button><button
-							onclick={() => runtime.dispatch('menu.settings.open')}>⚙ Settings</button
-						><button onclick={() => runtime.dispatch('panel.power')}>⏻ Power</button>
-					</div>
+					{/if}
+					{#if searchCategory === 'All' || searchCategory === 'Actions'}
+						<p class="section-label">QUICK ACTIONS</p>
+						<div class="quick-actions">
+							<button onclick={() => runtime.dispatch('panel.capture')}>▣ Screenshot</button><button
+								onclick={() => runtime.dispatch('menu.settings.open')}>⚙ Settings</button
+							><button onclick={() => runtime.dispatch('panel.power')}>⏻ Power</button>
+						</div>
+						{#each runtime.graph
+							.filter((node) => node.kind === 'action' && `${node.id} ${node.label}`
+										.toLowerCase()
+										.includes($osState.menuSearch.toLowerCase()))
+							.slice(0, 6) as node (node.id)}<button
+								class="search-result"
+								onclick={() => runtime.dispatch(node.id)}
+								><span><strong>{node.label}</strong><small>{node.id}</small></span><kbd>↵</kbd
+								></button
+							>{/each}
+					{/if}
 				</div>
 			</div>
 			<footer>
@@ -1997,11 +2736,21 @@
 					>
 						<i>{notification.app[0]}</i>
 						<div>
-							<strong>{notification.title}</strong>
+							<button
+								class="notification-open"
+								onclick={() =>
+									runtime.dispatch({ node: 'notifications.open', input: notification.id })}
+								><strong>{notification.title}</strong></button
+							>
 							<p>{notification.body}</p>
 							<small>{notification.app} · {notification.time}</small>
 						</div>
 						<button
+							aria-label={`Snooze ${notification.title}`}
+							onclick={() =>
+								runtime.dispatch({ node: 'notifications.snooze', input: notification.id })}
+							>◷</button
+						><button
 							aria-label={`Dismiss ${notification.title}`}
 							onclick={() =>
 								runtime.dispatch({ node: 'notifications.dismiss', input: notification.id })}
@@ -2023,14 +2772,32 @@
 				</div>
 				<span>Super V</span>
 			</header>
-			{#each $osState.clipboard as item, index (item)}<button
-					onclick={() => runtime.dispatch({ node: 'clipboard.copy', input: item })}
-					><small>{index === 0 ? 'CURRENT' : `${index + 1}`}</small><span>{item}</span><b>Copy</b
-					></button
-				>{/each}
+			{#each $osState.clipboard as item, index (`${index}-${item}`)}<article class="clipboard-item">
+					<button onclick={() => runtime.dispatch({ node: 'clipboard.copy', input: item })}
+						><small>{index === 0 ? 'CURRENT' : `${index + 1}`}</small><span>{item}</span><b>Copy</b
+						></button
+					><button
+						aria-label={$osState.pinnedClipboard.includes(index) ? 'Unpin item' : 'Pin item'}
+						onclick={() =>
+							runtime.dispatch({
+								node: $osState.pinnedClipboard.includes(index)
+									? 'clipboard.unpin'
+									: 'clipboard.pin',
+								input: index
+							})}>{$osState.pinnedClipboard.includes(index) ? '★' : '☆'}</button
+					><button
+						aria-label="Delete clipboard item"
+						onclick={() => runtime.dispatch({ node: 'clipboard.delete', input: index })}>×</button
+					>
+				</article>{/each}
 			<footer>
 				<button onclick={() => runtime.dispatch({ node: 'clipboard.copy', input: 'Pinned note' })}
 					>＋ Add pinned note</button
+				><button
+					class="danger"
+					onclick={() =>
+						window.confirm('Clear clipboard history?') && runtime.dispatch('clipboard.clear')}
+					>Clear</button
 				>
 			</footer>
 		</section>
@@ -2038,7 +2805,15 @@
 
 	{#if $osState.overlay === 'capture'}
 		<section class="capture-bar" aria-label="Screen capture">
-			<div><button class="active">Screenshot</button><button>Record</button></div>
+			<div>
+				<button class:active={!$osState.recordingActive}>Screenshot</button><button
+					class:active={$osState.recordingActive}
+					onclick={() =>
+						runtime.dispatch(
+							$osState.recordingActive ? 'capture.record_stop' : 'capture.record_start'
+						)}>{$osState.recordingActive ? 'Stop recording' : 'Record'}</button
+				>
+			</div>
 			<span></span>{#each ['Full screen', 'Window', 'Selection'] as mode (mode)}<button
 					onclick={() => runtime.dispatch({ node: 'capture.save', input: mode })}
 					>{mode === 'Full screen' ? '▣' : mode === 'Window' ? '▤' : '⌗'}<small>{mode}</small
@@ -2057,13 +2832,29 @@
 			<h2>Researcher</h2>
 			<p>What would you like to do?</p>
 			<div>
-				{#each [['↶', 'Log Out'], ['▣', 'Lock'], ['↻', 'Restart'], ['⏻', 'Power Off']] as action (action[1])}<button
-						onclick={() => runtime.dispatch('panel.power')}><i>{action[0]}</i>{action[1]}</button
-					>{/each}
+				<button onclick={() => (pendingPowerAction = 'logout')}><i>↶</i>Log Out</button><button
+					onclick={() => runtime.dispatch('system.lock')}><i>▣</i>Lock</button
+				><button onclick={() => (pendingPowerAction = 'restart')}><i>↻</i>Restart</button><button
+					onclick={() => (pendingPowerAction = 'shutdown')}><i>⏻</i>Power Off</button
+				>
 			</div>
 			<button onclick={() => runtime.dispatch('panel.power')}>Cancel</button>
 		</section>
 	{/if}
+	{#if pendingPowerAction}<div
+			class="confirmation-dialog"
+			role="alertdialog"
+			aria-label="Confirm power action"
+		>
+			<h2>Confirm {pendingPowerAction}</h2>
+			<p>This action can end the current session. Unsaved work may be lost.</p>
+			<div>
+				<button onclick={() => (pendingPowerAction = null)}>Cancel</button><button
+					class="danger"
+					onclick={confirmPowerAction}>Confirm</button
+				>
+			</div>
+		</div>{/if}
 
 	{#if $osState.toast}<div class="toast" role="status">✓ {$osState.toast}</div>{/if}
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from .environment import Condition, Goal, Milestone, TaskAutomaton
 
@@ -53,6 +53,66 @@ OPERATORS: dict[str, tuple[int, int | None]] = {
     "CONFIRM_BEFORE": (1, 1),
 }
 REFERENCES = {"it", "there", "that file", "current item", "previous result"}
+
+
+@dataclass(frozen=True)
+class AtomRule:
+    """Declarative grammar production from a language atom to a state predicate."""
+
+    pattern: re.Pattern[str]
+    goal: Callable[[re.Match[str], dict[str, Any]], tuple[str, Condition, dict[str, Any]]]
+
+
+def _boolean_goal(field: str, value: bool, identifier: str) -> Callable[[re.Match[str], dict[str, Any]], tuple[str, Condition, dict[str, Any]]]:
+    return lambda _match, _parameters: (identifier, Condition(field=field, value=value), {})
+
+
+ATOM_RULES: tuple[AtomRule, ...] = (
+    AtomRule(re.compile(r"^(?:turn |set )?(?:wi-?fi|wifi)\s+(?:on|enable(?:d)?)$", re.I), _boolean_goal("wifi.enabled", True, "wifi-enabled")),
+    AtomRule(re.compile(r"^(?:turn |set )?(?:wi-?fi|wifi)\s+(?:off|disable(?:d)?)$", re.I), _boolean_goal("wifi.enabled", False, "wifi-disabled")),
+    AtomRule(re.compile(r"^disconnect(?:\s+from)?(?:\s+(?:wi-?fi|wifi))?$", re.I), _boolean_goal("wifi.connected", False, "wifi-disconnected")),
+    AtomRule(
+        re.compile(r"^connect(?:\s+to)?(?:\s+(?:wi-?fi|wifi))?\s+[\"']?([^\"']+?)[\"']?$", re.I),
+        lambda match, _parameters: (
+            "wifi-connected",
+            Condition(field="wifi.ssid", value=match.group(1).strip()),
+            {"ssid": match.group(1).strip()},
+        ),
+    ),
+    AtomRule(
+        re.compile(r"^(?:set|change)\s+(?:the\s+)?brightness(?:\s+to)?\s+(100|[1-9]?\d)%?$", re.I),
+        lambda match, _parameters: ("brightness-set", Condition(field="display.brightness", value=int(match.group(1))), {"brightness": int(match.group(1))}),
+    ),
+    AtomRule(
+        re.compile(r"^(?:set|change)\s+(?:the\s+)?volume(?:\s+to)?\s+(100|[1-9]?\d)%?$", re.I),
+        lambda match, _parameters: ("volume-set", Condition(field="audio.volume", value=int(match.group(1))), {"volume": int(match.group(1))}),
+    ),
+    AtomRule(re.compile(r"^(?:turn |set )?(?:do not disturb|dnd)\s+(?:on|enable(?:d)?)$", re.I), _boolean_goal("notification.dnd", True, "dnd-enabled")),
+    AtomRule(re.compile(r"^(?:turn |set )?(?:do not disturb|dnd)\s+(?:off|disable(?:d)?)$", re.I), _boolean_goal("notification.dnd", False, "dnd-disabled")),
+    AtomRule(re.compile(r"^(?:turn |set )?bluetooth\s+(?:on|enable(?:d)?)$", re.I), _boolean_goal("bluetooth.enabled", True, "bluetooth-enabled")),
+    AtomRule(re.compile(r"^(?:turn |set )?bluetooth\s+(?:off|disable(?:d)?)$", re.I), _boolean_goal("bluetooth.enabled", False, "bluetooth-disabled")),
+    AtomRule(
+        re.compile(r"^(?:use|set|turn on)\s+(dark|light)(?:\s+(?:mode|theme))?$", re.I),
+        lambda match, _parameters: ("theme-set", Condition(field="display.theme", value=match.group(1).casefold()), {"theme": match.group(1).casefold()}),
+    ),
+    AtomRule(
+        re.compile(r"^(?:open|launch|focus)\s+(?:the\s+)?(browser|editor|files|settings|software|terminal)(?:\s+app)?$", re.I),
+        lambda match, _parameters: (
+            "application-focused",
+            Condition(field="application.focused_id", value=f"app:{match.group(1).casefold()}"),
+            {"app_id": f"app:{match.group(1).casefold()}"},
+        ),
+    ),
+    AtomRule(
+        re.compile(r"^(?:switch to|open)\s+workspace\s+(one|two|three|four|[1-4])$", re.I),
+        lambda match, _parameters: (
+            "workspace-selected",
+            Condition(field="workspace.current", value={"one": 1, "two": 2, "three": 3, "four": 4}.get(match.group(1).casefold(), int(match.group(1)) if match.group(1).isdigit() else 1)),
+            {},
+        ),
+    ),
+    AtomRule(re.compile(r"^(?:show|return to|go to)(?:\s+the)?\s+desktop$", re.I), _boolean_goal("system.desktop_visible", True, "desktop-visible")),
+)
 
 
 def _split_top_level(value: str) -> list[str]:
@@ -153,20 +213,83 @@ class TaskCompiler:
         else:
             # This is the natural-language surface of the small grammar.  It only
             # recognizes composition; domain semantics are resolved separately.
-            clauses = [
-                part.strip(" ,.")
-                for part in re.split(
-                    r"(?:\bfirst\b|\band then\b|\bthen\b|,\s*(?:and\s+)?)",
-                    normalized,
-                    flags=re.I,
-                )
-                if part.strip(" ,.")
-            ]
-            expression = Expression("SEQUENCE", tuple(Expression("ATOM", text=part) for part in clauses)) if len(clauses) > 1 else Expression("ATOM", text=normalized)
+            if "," not in normalized and not re.search(r"\b(?:first|then|after|before)\b", normalized, re.I) and re.search(r"\band\b", normalized, re.I):
+                clauses = [part.strip(" ,.") for part in re.split(r"\band\b", normalized, flags=re.I) if part.strip(" ,.")]
+                expression = Expression("AND", tuple(Expression("ATOM", text=part) for part in clauses))
+            else:
+                clauses = [
+                    part.strip(" ,.")
+                    for part in re.split(
+                        r"(?:\bfirst\b|\band then\b|\bthen\b|,\s*(?:and\s+)?)",
+                        normalized,
+                        flags=re.I,
+                    )
+                    if part.strip(" ,.")
+                ]
+                expression = Expression("SEQUENCE", tuple(Expression("ATOM", text=part) for part in clauses)) if len(clauses) > 1 else Expression("ATOM", text=normalized)
         expression = ReferenceResolver(references).resolve(expression)
         parameters = extract_parameters(normalized)
-        automaton = self._known_automaton(normalized, parameters)
+        explicit_grammar = expression.operator != "ATOM" and re.match(r"^[A-Z_]+\(", normalized) is not None
+        automaton = self._grammar_automaton(expression, normalized) if explicit_grammar else self._known_automaton(normalized, parameters)
+        if automaton is None:
+            automaton = self._known_automaton(normalized, parameters) if explicit_grammar else self._grammar_automaton(expression, normalized)
         return CompiledInstruction(normalized, expression, parameters, automaton, automaton is None)
+
+    @classmethod
+    def _grammar_automaton(cls, expression: Expression, source: str) -> TaskAutomaton | None:
+        """Compile compositional grammar productions without selecting actions."""
+
+        constraints: dict[str, Any] = {}
+
+        def atom(value: str) -> Milestone | None:
+            cleaned = value.strip(" ,.!?")
+            for rule in ATOM_RULES:
+                match = rule.pattern.fullmatch(cleaned)
+                if match:
+                    identifier, predicate, extracted = rule.goal(match, extract_parameters(cleaned))
+                    constraints.update(extracted)
+                    return Milestone(
+                        id=identifier,
+                        goals=[Goal(id=identifier, predicate=predicate, description=cleaned)],
+                    )
+            return None
+
+        def invert(condition: Condition) -> Condition:
+            opposites = {"eq": "neq", "neq": "eq", "truthy": "falsy", "falsy": "truthy", "contains": "not_contains", "not_contains": "contains"}
+            if condition.operator == "exists":
+                raise CompileError("NOT cannot invert an existence predicate")
+            return condition.model_copy(update={"operator": opposites[condition.operator]})
+
+        def compile_node(node: Expression) -> list[Milestone] | None:
+            if node.operator == "ATOM":
+                return [matched] if node.text and (matched := atom(node.text)) else None
+            compiled = [compile_node(child) for child in node.arguments]
+            if any(item is None for item in compiled):
+                return None
+            groups = [item for item in compiled if item is not None]
+            if node.operator == "SEQUENCE":
+                return [milestone for group in groups for milestone in group]
+            if node.operator in {"AND", "OR"}:
+                goals = [goal for group in groups for milestone in group for goal in milestone.goals]
+                return [Milestone(id=node.operator.casefold(), goals=goals, mode="all" if node.operator == "AND" else "any")]
+            if node.operator == "NOT":
+                goals = [goal.model_copy(update={"predicate": invert(goal.predicate)}) for goal in groups[0][0].goals]
+                return [Milestone(id=f"not-{groups[0][0].id}", goals=goals)]
+            # Control operators are retained as constraints consumed by policy
+            # validation while their reachable goals remain semantic predicates.
+            constraints.setdefault("operators", []).append(node.as_dict())
+            if node.operator == "IF":
+                branch_goals = [goal for group in groups[1:] for milestone in group for goal in milestone.goals]
+                return [Milestone(id="conditional", goals=branch_goals, mode="any")]
+            if node.operator == "UNTIL":
+                return groups[0]
+            return groups[-1] if node.operator == "PRESERVE" else [milestone for group in groups for milestone in group]
+
+        milestones = compile_node(expression)
+        if not milestones:
+            return None
+        signature = re.sub(r"[^a-z0-9]+", "-", source.casefold()).strip("-")[:48]
+        return TaskAutomaton(id=f"compiled-grammar-{signature}", milestones=milestones, constraints=constraints)
 
     @staticmethod
     def _known_automaton(source: str, parameters: dict[str, Any]) -> TaskAutomaton | None:

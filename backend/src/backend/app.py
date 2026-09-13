@@ -5,6 +5,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -13,10 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .database import Database
+from .benchmarks import evaluate_ten_action_benchmarks
 from .desktop import DesktopEnvironment, build_desktop_registry
 from .environment import Doer, ExecutionEngine, ExecutionLimits, TaskController
+from .evaluation import EvaluationTracker, TaskMeasurement
 from .filesystem import VirtualFilesystem
-from .planning import AdaptivePolicy, PolicyCache, QLearner, TrainingConfig, search_plan
+from .planning import AdaptivePolicy, PolicyCache, QLearner, TrainingConfig, assess_representation, search_plan
 from .schemas import (
     ActionExecuteRequest,
     CommandCreate,
@@ -24,7 +27,10 @@ from .schemas import (
     ContentUpdate,
     EventCreate,
     FileCreate,
+    FileCopyRequest,
     FileUpdate,
+    ArchiveRequest,
+    ExtractRequest,
     StatePatch,
     StateUpdate,
 )
@@ -51,8 +57,9 @@ desktop_registry = build_desktop_registry()
 desktop_environment = DesktopEnvironment(desktop_registry)
 desktop_doer = Doer(desktop_registry, desktop_environment)
 desktop_tasks = TaskController()
-policy_cache = PolicyCache()
+policy_cache = PolicyCache(Path(__file__).resolve().parents[2] / "data" / "policies")
 trained_policies: dict[str, Any] = {}
+evaluation_tracker = EvaluationTracker()
 
 
 @asynccontextmanager
@@ -154,6 +161,38 @@ async def compile_agent_task(value: CompileRequest):
     }
 
 
+@app.post("/api/agent/preview", tags=["agent"])
+async def preview_agent_task(value: CompileRequest):
+    """Return interpreted milestones and safety constraints without taking action."""
+    try:
+        compiled = task_compiler.compile(value.command, value.references)
+    except AmbiguousReferenceError as exc:
+        raise HTTPException(
+            409,
+            detail={"type": "ambiguous_reference", "reference": exc.reference, "candidates": exc.candidates},
+        ) from exc
+    except CompileError as exc:
+        raise HTTPException(422, detail={"type": "compile_error", "message": str(exc)}) from exc
+    automaton = compiled.automaton
+    return {
+        "source": compiled.source,
+        "expression": compiled.expression.as_dict(),
+        "parameters": compiled.parameters,
+        "supported": automaton is not None,
+        "task_id": automaton.id if automaton else None,
+        "milestones": [
+            {
+                "id": milestone.id,
+                "description": milestone.goals[0].description or milestone.id.replace("-", " "),
+                "mode": milestone.mode,
+                "goals": [goal.model_dump(mode="json") for goal in milestone.goals],
+            }
+            for milestone in automaton.milestones
+        ] if automaton else [],
+        "constraints": automaton.constraints if automaton else {},
+    }
+
+
 @app.post("/api/actions/{action_id}/execute", tags=["agent"])
 async def execute_registered_action(action_id: str, value: ActionExecuteRequest):
     result = desktop_doer.execute(
@@ -231,6 +270,7 @@ async def run_agent_task(task: TaskRequest):
         learner = QLearner(desktop_registry, policy_cache)
         stochastic_failures = automaton.constraints.get("stochastic_failures", {})
         training_episodes = 600 if stochastic_failures else 220
+        cache_hits_before = policy_cache.hits
         trained = learner.train(
             automaton,
             initial,
@@ -244,6 +284,27 @@ async def run_agent_task(task: TaskRequest):
             automaton,
             ExecutionLimits(max_steps=40, timeout_seconds=30, max_state_visits=5),
         )
+        cache_hit = policy_cache.hits > cache_hits_before
+        succeeded_steps = sum(item.status == "succeeded" for item in result.executions)
+        failures_observed = sum(item.status == "failed" for item in result.executions)
+        simulator_divergences = sum(
+            item.error_code == "verification_failed" for item in result.executions
+        )
+        evaluation_tracker.record(TaskMeasurement(
+            task_id=automaton.id,
+            status=result.status,
+            training_ms=0 if cache_hit else trained.training_duration_ms,
+            inference_ms=result.duration_ms,
+            environment_steps=len(result.executions),
+            unnecessary_actions=max(0, succeeded_steps - len(automaton.milestones)),
+            recoveries=sum(item.phase == "recover" for item in result.timeline),
+            failures=failures_observed,
+            cache_hit=cache_hit,
+            bfs_steps=len(bfs) if bfs else None,
+            astar_steps=len(astar) if astar else None,
+            rl_steps=succeeded_steps,
+            live_simulator_divergences=simulator_divergences,
+        ))
         return {
             "command": task.command,
             "goal": automaton.model_dump(mode="json"),
@@ -257,6 +318,8 @@ async def run_agent_task(task: TaskRequest):
             "status": result.status,
             "final_state": result.final_state.model_dump(mode="json"),
             "error": result.error,
+            "timeline": [item.model_dump(mode="json") for item in result.timeline],
+            "duration_ms": result.duration_ms,
             "training": {
                 "policy_version": trained.version,
                 "cache_key": trained.cache_key,
@@ -265,6 +328,9 @@ async def run_agent_task(task: TaskRequest):
                 "action_space": len(trained.action_space),
                 "success_rate": sum(trace.succeeded for trace in trained.traces) / len(trained.traces),
                 "recent_traces": [trace.model_dump(mode="json") for trace in trained.traces[-10:]],
+                "training_time_ms": 0 if cache_hit else trained.training_duration_ms,
+                "inference_time_ms": result.duration_ms,
+                "cache_hit": cache_hit,
             },
             "baselines": {
                 "bfs": {"steps": len(bfs) if bfs else None, "duration_ms": bfs_ms},
@@ -295,6 +361,51 @@ async def inspect_policy(cache_key: str):
     if policy is None:
         raise HTTPException(404, "Policy not found")
     return policy.model_dump(mode="json")
+
+
+@app.get("/api/agent/policies", tags=["agent"])
+async def list_policies():
+    policies = {**policy_cache._entries, **trained_policies}
+    return {
+        "items": [
+            {
+                "cache_key": item.cache_key,
+                "version": item.version,
+                "states": len(item.q_table),
+                "episodes": len(item.traces),
+                "action_space": len(item.action_space),
+                "training_duration_ms": item.training_duration_ms,
+            }
+            for item in policies.values()
+        ],
+        "cache": {"hits": policy_cache.hits, "misses": policy_cache.misses},
+    }
+
+
+@app.get("/api/agent/metrics", tags=["agent"])
+async def get_agent_metrics():
+    return evaluation_tracker.snapshot()
+
+
+@app.get("/api/agent/representation", tags=["agent"])
+async def get_representation_assessment():
+    observed_states = max((len(item.q_table) for item in trained_policies.values()), default=0)
+    return assess_representation(
+        desktop_environment.observe(), observed_q_states=observed_states
+    )
+
+
+@app.get("/api/agent/benchmarks", tags=["agent"])
+async def get_agent_benchmarks():
+    return await asyncio.to_thread(evaluate_ten_action_benchmarks)
+
+
+@app.post("/api/agent/tasks/{task_id}/rollback", tags=["agent"])
+async def rollback_agent_task(task_id: str):
+    result = desktop_doer.execute(EnvironmentProposal(action="system.undo_last"))
+    if result.status == "failed":
+        raise HTTPException(409, detail=result.model_dump(mode="json"))
+    return {"task_id": task_id, "result": result.model_dump(mode="json")}
 
 
 def load_state() -> dict[str, Any]:
@@ -383,6 +494,32 @@ async def delete_file(node_id: int) -> Response:
 @app.post("/api/files/{node_id}/restore", tags=["files"])
 async def restore_file(node_id: int) -> dict[str, Any]:
     return filesystem.restore(node_id)
+
+
+@app.post("/api/files/{node_id}/copy", tags=["files"])
+async def copy_file(node_id: int, value: FileCopyRequest) -> dict[str, Any]:
+    return filesystem.copy(node_id, value.parent_path)
+
+
+@app.delete("/api/files/{node_id}/permanent", status_code=204, tags=["files"])
+async def permanently_delete_file(node_id: int) -> Response:
+    filesystem.delete_permanently(node_id)
+    return Response(status_code=204)
+
+
+@app.delete("/api/files/trash/all", tags=["files"])
+async def empty_file_trash() -> dict[str, int]:
+    return {"deleted": filesystem.empty_trash()}
+
+
+@app.post("/api/files/archive", status_code=201, tags=["files"])
+async def create_archive(value: ArchiveRequest) -> dict[str, Any]:
+    return filesystem.compress(value.node_ids, value.parent_path, value.name)
+
+
+@app.post("/api/files/{node_id}/extract", tags=["files"])
+async def extract_archive(node_id: int, value: ExtractRequest) -> dict[str, Any]:
+    return {"items": filesystem.extract(node_id, value.destination)}
 
 
 @app.get("/api/events", tags=["events"])

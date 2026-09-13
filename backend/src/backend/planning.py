@@ -4,6 +4,7 @@ import heapq
 import hashlib
 import json
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,12 +54,59 @@ class TrainingTrace(BaseModel):
     transitions: list[str] = Field(default_factory=list)
 
 
+class RepresentationAssessment(BaseModel):
+    algorithm: str
+    recommended: bool
+    reason: str
+    estimated_discrete_states: int
+    observed_q_states: int
+    threshold: int
+
+
+def assess_representation(
+    state: FactoredState,
+    *,
+    observed_q_states: int = 0,
+    threshold: int = 100_000,
+) -> RepresentationAssessment:
+    """Gate DQN adoption on measured tabular-state pressure, not fashion."""
+    def local_cardinality(value: Any) -> int:
+        if isinstance(value, dict):
+            return sum(local_cardinality(nested) for nested in value.values())
+        if isinstance(value, list):
+            return max(1, min(50, len(value) + 1))
+        if isinstance(value, bool):
+            return 2
+        return 1
+
+    # Goal conditioning activates only a small slice of this factored state for
+    # each milestone, so additive local cardinality is the relevant pressure
+    # estimate; multiplying unrelated domains would dramatically overstate it.
+    cardinality = sum(local_cardinality(value) for value in state.fields.values())
+    pressure = max(cardinality, observed_q_states)
+    recommended = pressure > threshold
+    return RepresentationAssessment(
+        algorithm="dqn" if recommended else "tabular_q",
+        recommended=recommended,
+        reason=(
+            "Measured state cardinality exceeds the tabular budget; evaluate a DQN behind the same policy interface."
+            if recommended
+            else "The factored, goal-conditioned state remains within the tabular budget."
+        ),
+        estimated_discrete_states=cardinality,
+        observed_q_states=observed_q_states,
+        threshold=threshold,
+    )
+
+
 class TrainedPolicy(BaseModel):
     version: str
     cache_key: str
     q_table: dict[str, dict[str, float]]
     traces: list[TrainingTrace]
     action_space: list[str]
+    training_duration_ms: float = Field(default=0, ge=0)
+    trained_at_seed: int = 0
 
     def proposal(self, state: FactoredState, task: TaskAutomaton) -> ActionProposal | None:
         values = self.q_table.get(policy_state_key(state, task), {})
@@ -270,6 +318,7 @@ class QLearner:
         cached = self.cache.get(cache_key)
         if cached is not None:
             return cached
+        started = time.monotonic()
         rng = random.Random(config.seed)
         q_table: dict[str, dict[str, float]] = {}
         traces: list[TrainingTrace] = []
@@ -346,6 +395,8 @@ class QLearner:
             q_table=q_table,
             traces=traces,
             action_space=[spec.id for spec in self.registry.discover()],
+            training_duration_ms=round((time.monotonic() - started) * 1000, 3),
+            trained_at_seed=config.seed,
         )
         self.cache.put(policy)
         return policy

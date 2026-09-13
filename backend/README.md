@@ -45,6 +45,12 @@ The generic discovery and inspection endpoints are:
 - `POST /api/actions/{action_id}/execute` — validated, confirmed, verified execution
 - `POST /api/agent/tasks/{task_id}/cancel` — request cancellation between actions
 - `GET /api/agent/policies/{cache_key}` — inspect a trained Q-table and replayable traces
+- `GET /api/agent/policies` — list persisted policies and cache counters
+- `POST /api/agent/preview` — preview interpreted milestones without executing
+- `GET /api/agent/metrics` — timing, recovery, cache, planner/RL, divergence, and LLM metrics
+- `GET /api/agent/benchmarks` — run every benchmark from two distinct initial states
+- `GET /api/agent/representation` — measured tabular/DQN suitability gate
+- `POST /api/agent/tasks/{task_id}/rollback` — undo the latest reversible transition
 
 `backend.compiler` supports `SEQUENCE`, `AND`, `OR`, `NOT`, `UNTIL`, `IF`, `PRESERVE`, and
 `CONFIRM_BEFORE`, with structured reference ambiguity. `backend.planning` supplies seeded
@@ -53,4 +59,5 @@ Training operates only on a simulator generated from registry effects.
 Stochastic training can inject seeded transient failures; live benchmark execution uses the
 same normalized failure observation so the learned policy can choose a recovery action.
 
-Run tests with `uv run pytest`.
+Policies are persisted under `backend/data/policies` and invalidated by environment or action
+semantics changes. Run the complete contract and benchmark suite with `uv run pytest`.

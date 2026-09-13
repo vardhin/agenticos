@@ -41,6 +41,20 @@ class FileUpdate(BaseModel):
         return value
 
 
+class FileCopyRequest(BaseModel):
+    parent_path: str
+
+
+class ArchiveRequest(BaseModel):
+    node_ids: list[int] = Field(min_length=1)
+    parent_path: str
+    name: str = Field(min_length=1, max_length=255)
+
+
+class ExtractRequest(BaseModel):
+    destination: str
+
+
 class ContentUpdate(BaseModel):
     content: str
     mime_type: str | None = "text/plain"

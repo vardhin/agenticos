@@ -1,0 +1,18 @@
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - agentos-data:/data
+    ports:
+      - "8000:8000"
+  frontend:
+    build: ./frontend
+    environment:
+      AGENTOS_BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "4173:4173"
+
+volumes:
+  agentos-data:

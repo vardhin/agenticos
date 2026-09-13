@@ -178,6 +178,17 @@ class ActionResult(BaseModel):
     duration_ms: int = Field(ge=0)
 
 
+class LoopEvent(BaseModel):
+    """One observable phase of the environment control loop."""
+
+    sequence: int = Field(ge=0)
+    phase: Literal["observe", "propose", "validate", "act", "verify", "recover"]
+    action: str | None = None
+    state_hash: str | None = None
+    status: str
+    detail: str = ""
+
+
 class ExecutionLimits(BaseModel):
     max_steps: int = Field(default=50, ge=1)
     timeout_seconds: float = Field(default=30, gt=0)
@@ -193,6 +204,8 @@ class TaskResult(BaseModel):
     progress: int
     error: str | None = None
     pending_proposal: ActionProposal | None = None
+    timeline: list[LoopEvent] = Field(default_factory=list)
+    duration_ms: int = Field(default=0, ge=0)
 
 
 class EnvironmentBinding(Protocol):
@@ -216,7 +229,17 @@ class Policy(Protocol):
 def _resolved_value(item: Condition | Effect, args: Mapping[str, Any]) -> Any:
     if item.value_from_argument is not None:
         return args.get(item.value_from_argument)
-    return item.value
+
+    def resolve_template(value: Any) -> Any:
+        if isinstance(value, dict):
+            if set(value) == {"$arg"}:
+                return args.get(str(value["$arg"]))
+            return {key: resolve_template(nested) for key, nested in value.items()}
+        if isinstance(value, list):
+            return [resolve_template(nested) for nested in value]
+        return value
+
+    return resolve_template(item.value)
 
 
 def condition_holds(condition: Condition, state: FactoredState, args: Mapping[str, Any]) -> bool:
@@ -341,6 +364,8 @@ class GeneratedSimulator:
         self._fields = json.loads(json.dumps(initial_fields))
         self._revision = 0
         self._lock = RLock()
+        self._undo: list[dict[str, JsonValue]] = []
+        self._redo: list[dict[str, JsonValue]] = []
 
     def observe(self) -> FactoredState:
         with self._lock:
@@ -353,10 +378,47 @@ class GeneratedSimulator:
     def execute(self, action_id: str, args: Mapping[str, JsonValue]) -> str:
         spec = self.registry.get(action_id)
         with self._lock:
+            if action_id == "system.undo_last":
+                if not self._undo:
+                    raise RuntimeError("Nothing to undo")
+                self._redo.append(json.loads(json.dumps(self._fields)))
+                self._fields = self._undo.pop()
+                self._set_history_flags()
+                self._revision += 1
+                return "Last action undone"
+            if action_id == "system.redo_last":
+                if not self._redo:
+                    raise RuntimeError("Nothing to redo")
+                self._undo.append(json.loads(json.dumps(self._fields)))
+                self._fields = self._redo.pop()
+                self._set_history_flags()
+                self._revision += 1
+                return "Last action redone"
+            if spec.reversible and action_id not in {"system.observe", "system.wait", "system.begin_task"}:
+                self._undo.append(json.loads(json.dumps(self._fields)))
+                self._undo = self._undo[-50:]
+                self._redo.clear()
             for effect in spec.effects:
                 self._apply(effect, args)
+            self._set_history_flags()
             self._revision += 1
         return f"{action_id} completed"
+
+    def snapshot(self) -> dict[str, JsonValue]:
+        with self._lock:
+            return json.loads(json.dumps(self._fields))
+
+    def restore_snapshot(self, fields: Mapping[str, JsonValue]) -> None:
+        with self._lock:
+            self._fields = json.loads(json.dumps(fields))
+            self._set_history_flags()
+            self._revision += 1
+
+    def _set_history_flags(self) -> None:
+        system = self._fields.get("system")
+        if isinstance(system, dict):
+            system["undo_available"] = bool(self._undo)
+            system["redo_available"] = bool(self._redo)
 
     def record_failure(self, action_id: str) -> None:
         """Expose a normalized action failure to the next policy decision."""
@@ -454,6 +516,10 @@ class Doer:
             after = self.binding.observe()
             verified = all(condition_holds(item, after, proposal.args) for item in spec.postconditions)
             if not verified:
+                record_failure = getattr(self.binding, "record_failure", None)
+                if callable(record_failure):
+                    record_failure(proposal.action)
+                    after = self.binding.observe()
                 return self._result(
                     proposal, "failed", "Postcondition verification failed", "verification_failed",
                     before, after, started,
@@ -530,47 +596,67 @@ class ExecutionEngine:
         visits: dict[str, int] = {}
         cumulative_risk = 0
         started = time.monotonic()
+        timeline: list[LoopEvent] = []
+
+        def record(phase: Literal["observe", "propose", "validate", "act", "verify", "recover"], status: str, *, action: str | None = None, state: FactoredState | None = None, detail: str = "") -> None:
+            timeline.append(LoopEvent(
+                sequence=len(timeline), phase=phase, action=action,
+                state_hash=state.state_hash() if state else None,
+                status=status, detail=detail,
+            ))
+
+        def result(status: Literal["succeeded", "failed", "cancelled", "confirmation_required"], state: FactoredState, error: str | None = None, pending: ActionProposal | None = None) -> TaskResult:
+            return self._task_result(
+                task, status, executions, state, error, pending,
+                timeline=timeline,
+                duration_ms=max(0, round((time.monotonic() - started) * 1000)),
+            )
         try:
             for _ in range(limits.max_steps):
                 state = self.doer.binding.observe()
+                record("observe", "ok", state=state, detail=f"milestone {task.progress(state)}/{len(task.milestones)}")
                 if task.is_satisfied(state):
-                    return self._task_result(task, "succeeded", executions, state)
+                    return result("succeeded", state)
                 if token.is_set():
-                    return self._task_result(task, "cancelled", executions, state, "Task cancelled")
+                    return result("cancelled", state, "Task cancelled")
                 if time.monotonic() - started >= limits.timeout_seconds:
-                    return self._task_result(task, "failed", executions, state, "Task timed out")
+                    return result("failed", state, "Task timed out")
                 fingerprint = f"{task.progress(state)}:{state.state_hash()}"
                 visits[fingerprint] = visits.get(fingerprint, 0) + 1
                 if visits[fingerprint] > limits.max_state_visits:
-                    return self._task_result(task, "failed", executions, state, "Cycle detected")
+                    return result("failed", state, "Cycle detected")
 
                 proposal = self.policy.propose(state, task, self.registry.discover(), tuple(executions))
                 if proposal is None:
-                    return self._task_result(task, "failed", executions, state, "Policy returned no proposal")
+                    record("propose", "error", state=state, detail="Policy returned no proposal")
+                    return result("failed", state, "Policy returned no proposal")
+                record("propose", "ok", action=proposal.action, state=state, detail=proposal.policy_version or self.policy.version)
                 validation_error = self.registry.validate(proposal, state)
                 if validation_error:
-                    return self._task_result(task, "failed", executions, state, validation_error)
+                    record("validate", "error", action=proposal.action, state=state, detail=validation_error)
+                    return result("failed", state, validation_error)
+                record("validate", "ok", action=proposal.action, state=state)
                 spec = self.registry.get(proposal.action)
                 cumulative_risk += RISK_POINTS[spec.risk]
                 if cumulative_risk > limits.max_cumulative_risk:
-                    return self._task_result(task, "failed", executions, state, "Cumulative risk limit exceeded")
+                    return result("failed", state, "Cumulative risk limit exceeded")
 
-                result = self.doer.execute(proposal, cancelled=token)
-                executions.append(result)
-                if result.status == "confirmation_required":
-                    return self._task_result(
-                        task, "confirmation_required", executions, result.observed_state,
-                        result.message, proposal,
-                    )
-                if result.status in {"failed", "cancelled"}:
+                action_result = self.doer.execute(proposal, cancelled=token)
+                executions.append(action_result)
+                record("act", action_result.status, action=proposal.action, state=action_result.observed_state, detail=action_result.message)
+                record("verify", "ok" if action_result.verified else "error", action=proposal.action, state=action_result.observed_state, detail="postconditions satisfied" if action_result.verified else action_result.error_code or "not verified")
+                if action_result.status == "confirmation_required":
+                    return result("confirmation_required", action_result.observed_state, action_result.message, proposal)
+                if action_result.status in {"failed", "cancelled"}:
                     # The next policy decision sees the failure and fresh observation. A
                     # cancellation is terminal; ordinary failures may be recovered from.
-                    if result.status == "cancelled":
-                        return self._task_result(task, "cancelled", executions, result.observed_state, result.message)
+                    if action_result.status == "cancelled":
+                        return result("cancelled", action_result.observed_state, action_result.message)
+                    record("recover", "retry", action=proposal.action, state=action_result.observed_state, detail="control returned to policy")
             final = self.doer.binding.observe()
             if task.is_satisfied(final):
-                return self._task_result(task, "succeeded", executions, final)
-            return self._task_result(task, "failed", executions, final, "Maximum step limit reached")
+                return result("succeeded", final)
+            return result("failed", final, "Maximum step limit reached")
         finally:
             self.controller.finish(task.id)
 
@@ -582,6 +668,9 @@ class ExecutionEngine:
         state: FactoredState,
         error: str | None = None,
         pending: ActionProposal | None = None,
+        *,
+        timeline: list[LoopEvent] | None = None,
+        duration_ms: int = 0,
     ) -> TaskResult:
         return TaskResult(
             task_id=task.id,
@@ -591,6 +680,8 @@ class ExecutionEngine:
             progress=task.progress(state),
             error=error,
             pending_proposal=pending,
+            timeline=timeline or [],
+            duration_ms=duration_ms,
         )
 
 

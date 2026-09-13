@@ -735,7 +735,63 @@ export const controlGraph: ControlNode[] = [
 		kind: 'action',
 		parentId: 'window.terminal',
 		description: 'Close Terminal'
-	}
+	},
+	...['actions', 'task', 'policy'].map((tab) => ({
+		id: `window.inspector.tab.${tab}`,
+		label: `${tab[0].toUpperCase()}${tab.slice(1)} tab`,
+		kind: 'action' as const,
+		parentId: 'window.inspector',
+		description: `Inspect ${tab}`
+	})),
+	...[
+		['control.night-light', 'Night light'],
+		['control.display-scale', 'Display scale'],
+		['control.display-resolution', 'Display resolution'],
+		['control.audio-output', 'Audio output'],
+		['control.audio-input', 'Audio input'],
+		['control.input-gain', 'Input gain'],
+		['control.bluetooth.device', 'Bluetooth device']
+	].map(([id, label]) => ({
+		id,
+		label,
+		kind: 'input' as const,
+		parentId: 'panel.control',
+		description: `Set ${label.toLowerCase()}`
+	})),
+	...['lock', 'logout', 'restart', 'shutdown', 'undo_last', 'redo_last'].map((action) => ({
+		id: `system.${action}`,
+		label: action.replace('_', ' '),
+		kind: 'action' as const,
+		parentId: 'desktop',
+		description: `System ${action.replace('_', ' ')}`
+	})),
+	...[
+		['filesystem.mount', 'Mount external device'],
+		['filesystem.unmount', 'Unmount external device'],
+		['open_with.open', 'Open with application']
+	].map(([id, label]) => ({
+		id,
+		label,
+		kind: 'input' as const,
+		parentId: 'desktop.filesystem',
+		description: label
+	})),
+	...[
+		['clipboard.pin', 'Pin clipboard item'],
+		['clipboard.unpin', 'Unpin clipboard item'],
+		['clipboard.delete', 'Delete clipboard item'],
+		['clipboard.clear', 'Clear clipboard'],
+		['notifications.open', 'Open notification'],
+		['notifications.snooze', 'Snooze notification'],
+		['capture.record_start', 'Start screen recording'],
+		['capture.record_stop', 'Stop screen recording']
+	].map(([id, label]) => ({
+		id,
+		label,
+		kind: 'input' as const,
+		parentId: 'desktop',
+		description: label
+	}))
 ];
 
 export const nodeById = new Map(controlGraph.map((node) => [node.id, node]));

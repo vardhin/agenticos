@@ -113,3 +113,33 @@ def test_state_revisions_and_events(tmp_path: Path) -> None:
             assert (await client.get("/api/events")).json()["items"][0]["node"] == "files.path"
 
     asyncio.run(scenario())
+
+
+def test_copy_archive_extract_and_permanent_delete(tmp_path: Path) -> None:
+    configure_database(tmp_path)
+
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = (await client.post("/api/files", json={
+                "parent_path": "Documents", "name": "source.txt", "kind": "text", "content": "source"
+            })).json()
+            copied = await client.post(
+                f"/api/files/{created['id']}/copy", json={"parent_path": "Downloads"}
+            )
+            assert copied.status_code == 200
+            assert copied.json()["path"].endswith("/Downloads/source.txt")
+            archive = await client.post("/api/files/archive", json={
+                "node_ids": [created["id"]], "parent_path": "Documents", "name": "bundle"
+            })
+            assert archive.status_code == 201
+            extracted = await client.post(
+                f"/api/files/{archive.json()['id']}/extract", json={"destination": "Desktop"}
+            )
+            assert extracted.status_code == 200
+            assert extracted.json()["items"][0]["name"] == "source.txt"
+            assert (await client.delete(f"/api/files/{created['id']}")).status_code == 204
+            permanent = await client.delete(f"/api/files/{created['id']}/permanent")
+            assert permanent.status_code == 204
+
+    asyncio.run(scenario())

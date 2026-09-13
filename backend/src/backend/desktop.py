@@ -76,6 +76,11 @@ def desktop_initial_fields() -> dict[str, JsonValue]:
         "workspace": {
             "ids": ["workspace:1"],
             "current": 1,
+            "names": {"1": "Workspace 1"},
+            "window_membership": [
+                {"window_id": "window:editor", "index": 1},
+                {"window_id": "window:files", "index": 1},
+            ],
             "last_created": 1,
             "last_renamed": None,
             "last_removed": None,
@@ -346,7 +351,7 @@ def build_desktop_registry() -> ActionRegistry:
     add("workspace.create", "Create a workspace", arguments={"index": _arg("integer")}, effects=[_effect("workspace.last_created", arg="index"), _effect("workspace.ids", operation="add", arg="index")])
     add("workspace.switch", "Switch workspaces", arguments={"index": _arg("integer")}, effects=[_effect("workspace.current", arg="index"), _effect("workspace.visited_indices", operation="add", arg="index")])
     add("workspace.rename", "Rename a workspace", arguments={"index": _arg("integer"), "name": _arg("string")}, effects=[_effect("workspace.last_renamed", arg="index"), _effect("workspace.name", arg="name")])
-    add("workspace.move_window", "Move a window to a workspace", arguments={"window_id": _arg("string"), "index": _arg("integer")}, effects=[_effect("workspace.last_window_id", arg="window_id"), _effect("workspace.last_window_index", arg="index")])
+    add("workspace.move_window", "Move a window to a workspace", arguments={"window_id": _arg("string"), "index": _arg("integer")}, effects=[_effect("workspace.last_window_id", arg="window_id"), _effect("workspace.last_window_index", arg="index"), _effect("workspace.window_membership", {"window_id": {"$arg": "window_id"}, "index": {"$arg": "index"}}, operation="add")])
     add("workspace.remove", "Remove a workspace", arguments={"index": _arg("integer")}, effects=[_effect("workspace.last_removed", arg="index"), _effect("workspace.ids", operation="remove", arg="index")])
     add("workspace.show_overview", "Show workspace overview", effects=[_effect("workspace.overview", True)])
 
@@ -507,11 +512,41 @@ class DesktopEnvironment(GeneratedSimulator):
         super().__init__(registry or build_desktop_registry(), initial_fields or desktop_initial_fields())
         self._initial_fields = deepcopy(initial_fields or desktop_initial_fields())
         self.failure_schedule: dict[str, int] = {}
+        self.failure_modes: dict[str, list[str]] = {}
 
     def inject_failures(self, schedule: dict[str, int]) -> None:
         self.failure_schedule = {key: max(0, int(value)) for key, value in schedule.items()}
 
+    def inject_failure_modes(self, schedule: dict[str, list[str] | str]) -> None:
+        """Inject named live faults for recovery and contract testing."""
+        self.failure_modes = {
+            key: [value] if isinstance(value, str) else list(value)
+            for key, value in schedule.items()
+        }
+
     def execute(self, action_id: str, args: dict[str, JsonValue] | Any) -> str:
+        modes = self.failure_modes.get(action_id, [])
+        if modes:
+            mode = modes.pop(0)
+            if mode == "stale_state":
+                # Report success without applying effects. The Doer's observer must
+                # detect that postconditions did not become true.
+                return f"Injected stale state: {action_id}"
+            if mode == "permission_denied":
+                raise PermissionError(f"Permission denied: {action_id}")
+            if mode == "missing_file":
+                raise FileNotFoundError(f"Missing file: {action_id}")
+            if mode == "disappearing_network":
+                wifi = self._fields.get("wifi", {})
+                if isinstance(wifi, dict):
+                    wifi["visible_ssids"] = []
+                    wifi["connected"] = False
+                    wifi["ssid"] = None
+                self._revision += 1
+                raise ConnectionError("Network disappeared during action")
+            if mode == "duplicate_filename":
+                raise FileExistsError("Duplicate filename")
+            raise TimeoutError(f"Injected timeout: {action_id}")
         remaining = self.failure_schedule.get(action_id, 0)
         if remaining > 0:
             self.failure_schedule[action_id] = remaining - 1
@@ -523,6 +558,9 @@ class DesktopEnvironment(GeneratedSimulator):
             self._fields = deepcopy(fields or self._initial_fields)
             self._revision += 1
             self.failure_schedule = {}
+            self.failure_modes = {}
+            self._undo = []
+            self._redo = []
 
 
 DESKTOP_ACTION_IDS = tuple(spec.id for spec in build_desktop_registry().discover())

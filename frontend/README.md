@@ -35,7 +35,22 @@ curl -X POST http://127.0.0.1:5173/api/control \
   -d '{"node":"menu.search","input":"Files"}'
 ```
 
-The browser also exposes `window.agentOS.dispatch()`, listens for `agentos:command` custom events and `postMessage` commands, and receives server commands over one EventSource connection. Use the Inspector's Events, Nodes, and State tabs—or the browser console—to observe every transition.
+The browser also exposes `window.agentOS.dispatch()`, listens for `agentos:command` custom events and `postMessage` commands, and receives server commands over one EventSource connection. Use the Inspector's Events, Nodes, Actions, Task, Policy, and State tabs—or the browser console—to inspect contracts, task automata, Q-tables, metrics, and every control-loop transition.
+
+The desktop includes keyboard navigation and shortcuts, confirmations and rollback, persistent
+session/terminal state, complete Files and Editor tools, browser tabs/history/bookmarks/downloads,
+detailed device settings, and notification/clipboard/capture controls.
+
+## Verify and package
+
+```sh
+bun run check
+bun run lint
+bun run build:budget
+bunx playwright test
+```
+
+From the repository root, `docker compose up --build` starts the packaged frontend and backend.
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
 

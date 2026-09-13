@@ -4,11 +4,13 @@ import adapter from '@sveltejs/adapter-auto';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+const backendTarget = process.env.AGENTOS_BACKEND_URL ?? 'http://127.0.0.1:8000';
+
 export default defineConfig({
 	server: {
 		proxy: {
 			'/backend-api': {
-				target: 'http://127.0.0.1:8000',
+				target: backendTarget,
 				changeOrigin: true,
 				rewrite: (path) => path.replace(/^\/backend-api/, '/api')
 			}
@@ -19,7 +21,7 @@ export default defineConfig({
 		port: 4173,
 		proxy: {
 			'/backend-api': {
-				target: 'http://127.0.0.1:8000',
+				target: backendTarget,
 				changeOrigin: true,
 				rewrite: (path) => path.replace(/^\/backend-api/, '/api')
 			}

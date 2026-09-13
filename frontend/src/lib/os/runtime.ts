@@ -45,6 +45,7 @@ export const initialState: OSState = {
 	overlay: null,
 	workspace: 1,
 	workspaceCount: 1,
+	workspaceNames: ['Workspace 1'],
 	wifiEnabled: true,
 	bluetoothEnabled: true,
 	doNotDisturb: false,
@@ -52,12 +53,24 @@ export const initialState: OSState = {
 	connectedNetwork: 'StudioNet',
 	volume: 72,
 	brightness: 84,
+	nightLight: false,
+	displayScale: 100,
+	displayResolution: '1920×1080',
+	audioOutput: 'Built-in Speakers',
+	audioInput: 'Built-in Microphone',
+	inputGain: 70,
+	pairedBluetoothDevices: ['Agent Keyboard'],
+	connectedBluetoothDevice: 'Agent Keyboard',
+	mountedDevices: ['Archive USB'],
+	sessionLocked: false,
 	menuSearch: '',
 	inspectorTab: 'events',
 	inspectorQuery: '',
 	editorText: initialText,
 	filesPath: 'Home',
 	clipboard: ['https://agentos.dev/docs', 'Desktop Actions — Research Notes', 'pacman -Syu'],
+	pinnedClipboard: [],
+	recordingActive: false,
 	notifications: [
 		{
 			id: 1,
@@ -314,6 +327,11 @@ export function createOSRuntime() {
 	let persistState = false;
 	let persistTimer: ReturnType<typeof setTimeout> | undefined;
 	const externalHandlers = new Map<string, (input: unknown) => Promise<string> | string>();
+	const undoStack: OSState[] = [];
+	const redoStack: OSState[] = [];
+	let taskCancelled = false;
+	let taskSteps = 0;
+	let taskStartedAt = 0;
 
 	async function initialize() {
 		try {
@@ -491,9 +509,44 @@ export function createOSRuntime() {
 			case 'panel.power':
 				showOverlay('power');
 				return 'Power menu opened';
+			case 'system.lock':
+				state.update((current) => ({ ...current, sessionLocked: true, overlay: null }));
+				return 'Session locked';
+			case 'system.unlock':
+				state.update((current) => ({ ...current, sessionLocked: false }));
+				return 'Session unlocked';
+			case 'system.logout':
+			case 'system.restart':
+			case 'system.shutdown':
+				state.update((current) => ({ ...current, overlay: null }));
+				return `${command.node.split('.')[1]} requested`;
+			case 'system.undo_last': {
+				const previous = undoStack.pop();
+				if (!previous) throw new Error('Nothing to undo');
+				redoStack.push(structuredClone(get(state)));
+				state.set({ ...previous, toast: 'Last action undone' });
+				return 'Last action undone';
+			}
+			case 'system.redo_last': {
+				const next = redoStack.pop();
+				if (!next) throw new Error('Nothing to redo');
+				undoStack.push(structuredClone(get(state)));
+				state.set({ ...next, toast: 'Last action redone' });
+				return 'Last action redone';
+			}
 			case 'control.bluetooth.toggle':
 				state.update((current) => ({ ...current, bluetoothEnabled: !current.bluetoothEnabled }));
 				return `Bluetooth ${get(state).bluetoothEnabled ? 'enabled' : 'disabled'}`;
+			case 'control.bluetooth.device': {
+				const device = String(input);
+				state.update((current) => ({
+					...current,
+					bluetoothEnabled: true,
+					pairedBluetoothDevices: [...new Set([...current.pairedBluetoothDevices, device])],
+					connectedBluetoothDevice: current.connectedBluetoothDevice === device ? null : device
+				}));
+				return `${get(state).connectedBluetoothDevice ? 'Connected' : 'Disconnected'} ${device}`;
+			}
 			case 'control.dnd.toggle':
 				state.update((current) => ({ ...current, doNotDisturb: !current.doNotDisturb }));
 				return `Do Not Disturb ${get(state).doNotDisturb ? 'enabled' : 'disabled'}`;
@@ -512,6 +565,24 @@ export function createOSRuntime() {
 					brightness: Math.max(10, Math.min(100, Number(input)))
 				}));
 				return `Brightness ${get(state).brightness}%`;
+			case 'control.night-light':
+				state.update((current) => ({ ...current, nightLight: !current.nightLight }));
+				return `Night light ${get(state).nightLight ? 'enabled' : 'disabled'}`;
+			case 'control.display-scale':
+				state.update((current) => ({ ...current, displayScale: Number(input) }));
+				return `Display scale ${get(state).displayScale}%`;
+			case 'control.display-resolution':
+				state.update((current) => ({ ...current, displayResolution: String(input) }));
+				return `Resolution ${get(state).displayResolution}`;
+			case 'control.audio-output':
+				state.update((current) => ({ ...current, audioOutput: String(input) }));
+				return `Audio output ${get(state).audioOutput}`;
+			case 'control.audio-input':
+				state.update((current) => ({ ...current, audioInput: String(input) }));
+				return `Audio input ${get(state).audioInput}`;
+			case 'control.input-gain':
+				state.update((current) => ({ ...current, inputGain: Number(input) }));
+				return `Input gain ${get(state).inputGain}%`;
 			case 'notifications.clear':
 				state.update((current) => ({ ...current, notifications: [] }));
 				return 'Notifications cleared';
@@ -521,6 +592,20 @@ export function createOSRuntime() {
 					notifications: current.notifications.filter((item) => item.id !== Number(input))
 				}));
 				return 'Notification dismissed';
+			case 'notifications.open':
+				state.update((current) => ({
+					...current,
+					notifications: current.notifications.map((item) =>
+						item.id === Number(input) ? { ...item, unread: false } : item
+					)
+				}));
+				return 'Notification opened';
+			case 'notifications.snooze':
+				state.update((current) => ({
+					...current,
+					notifications: current.notifications.filter((item) => item.id !== Number(input))
+				}));
+				return 'Notification snoozed';
 			case 'workspace.create': {
 				const current = get(state);
 				const requested = input === undefined ? current.workspaceCount + 1 : Number(input);
@@ -528,7 +613,11 @@ export function createOSRuntime() {
 					throw new Error('workspace.create requires a workspace number from 1 to 4');
 				state.update((value) => ({
 					...value,
-					workspaceCount: Math.max(value.workspaceCount, requested)
+					workspaceCount: Math.max(value.workspaceCount, requested),
+					workspaceNames: Array.from(
+						{ length: Math.max(value.workspaceCount, requested) },
+						(_, index) => value.workspaceNames[index] ?? `Workspace ${index + 1}`
+					)
 				}));
 				return `Workspace ${requested} ready`;
 			}
@@ -586,10 +675,44 @@ export function createOSRuntime() {
 				toast('Copied to clipboard');
 				return 'Clipboard item copied';
 			}
+			case 'clipboard.pin': {
+				const index = Number(input);
+				state.update((current) => ({
+					...current,
+					pinnedClipboard: [...new Set([...current.pinnedClipboard, index])]
+				}));
+				return `Pinned clipboard item ${index + 1}`;
+			}
+			case 'clipboard.unpin': {
+				const index = Number(input);
+				state.update((current) => ({
+					...current,
+					pinnedClipboard: current.pinnedClipboard.filter((item) => item !== index)
+				}));
+				return `Unpinned clipboard item ${index + 1}`;
+			}
+			case 'clipboard.delete': {
+				const index = Number(input);
+				state.update((current) => ({
+					...current,
+					clipboard: current.clipboard.filter((_, itemIndex) => itemIndex !== index),
+					pinnedClipboard: current.pinnedClipboard.filter((item) => item !== index)
+				}));
+				return `Deleted clipboard item ${index + 1}`;
+			}
+			case 'clipboard.clear':
+				state.update((current) => ({ ...current, clipboard: [], pinnedClipboard: [] }));
+				return 'Clipboard cleared';
 			case 'capture.save':
 				state.update((current) => ({ ...current, overlay: null }));
 				toast(`${String(input ?? 'Screenshot')} saved to Pictures`);
 				return 'Capture saved';
+			case 'capture.record_start':
+				state.update((current) => ({ ...current, recordingActive: true, overlay: null }));
+				return 'Screen recording started';
+			case 'capture.record_stop':
+				state.update((current) => ({ ...current, recordingActive: false }));
+				return 'Screen recording stopped and saved';
 			case 'software.toggle': {
 				const app = String(input);
 				state.update((current) => ({
@@ -606,6 +729,24 @@ export function createOSRuntime() {
 			case 'files.action':
 				toast(String(input));
 				return String(input);
+			case 'filesystem.mount': {
+				const device = String(input ?? 'Archive USB');
+				state.update((current) => ({
+					...current,
+					mountedDevices: [...new Set([...current.mountedDevices, device])]
+				}));
+				return `${device} mounted`;
+			}
+			case 'filesystem.unmount': {
+				const device = String(input ?? 'Archive USB');
+				state.update((current) => ({
+					...current,
+					mountedDevices: current.mountedDevices.filter((item) => item !== device)
+				}));
+				return `${device} unmounted`;
+			}
+			case 'open_with.open':
+				return `Opened with ${String((input as { app?: string } | undefined)?.app ?? 'application')}`;
 			case 'wifi.toggle':
 				state.update((current) => ({
 					...current,
@@ -630,6 +771,9 @@ export function createOSRuntime() {
 				return 'Inspector query updated';
 			case 'window.inspector.tab.events':
 			case 'window.inspector.tab.nodes':
+			case 'window.inspector.tab.actions':
+			case 'window.inspector.tab.task':
+			case 'window.inspector.tab.policy':
 			case 'window.inspector.tab.state':
 			case 'window.inspector.tab.settings':
 				state.update((current) => ({
@@ -675,16 +819,36 @@ export function createOSRuntime() {
 				? { node: command, source }
 				: { ...command, source: command.source ?? source };
 		const started = performance.now();
+		const before = structuredClone(get(state));
 		let result: ActionEvent['result'] = 'ok';
 		let detail: string;
 		try {
-			if (!nodeById.has(normalized.node) && !normalized.node.endsWith('.focus'))
+			if (taskCancelled && normalized.source === 'system') throw new Error('Task cancelled');
+			if (normalized.source === 'system' && taskStartedAt) {
+				if (taskSteps >= 50) throw new Error('Maximum task step limit reached');
+				if (performance.now() - taskStartedAt > 30_000) throw new Error('Task timed out');
+				taskSteps += 1;
+			}
+			if (
+				!nodeById.has(normalized.node) &&
+				!normalized.node.endsWith('.focus') &&
+				!normalized.node.startsWith('system.')
+			)
 				throw new Error(`Unknown node: ${normalized.node}`);
 			detail = await execute(normalized);
 			state.update((current) => ({ ...current, focusedNode: normalized.node }));
 		} catch (error) {
 			result = 'error';
 			detail = error instanceof Error ? error.message : String(error);
+		}
+		if (
+			result === 'ok' &&
+			!['system.undo_last', 'system.redo_last'].includes(normalized.node) &&
+			JSON.stringify(before) !== JSON.stringify(get(state))
+		) {
+			undoStack.push(before);
+			if (undoStack.length > 50) undoStack.shift();
+			redoStack.length = 0;
 		}
 		const event: ActionEvent = {
 			id: ++eventId,
@@ -753,6 +917,17 @@ export function createOSRuntime() {
 		return () => externalHandlers.delete(node);
 	}
 
+	function beginTask() {
+		taskCancelled = false;
+		taskSteps = 0;
+		taskStartedAt = performance.now();
+	}
+
+	function cancelTask() {
+		taskCancelled = true;
+		return true;
+	}
+
 	return {
 		state,
 		events,
@@ -762,6 +937,9 @@ export function createOSRuntime() {
 		applyWifiObservation,
 		recordObservedAction,
 		registerHandler,
+		beginTask,
+		cancelTask,
+		isTaskCancelled: () => taskCancelled,
 		initialize,
 		graph: controlGraph,
 		snapshot: () => get(state)
