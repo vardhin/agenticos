@@ -15,9 +15,63 @@
 	let selectedFileId = $state<number | null>(null);
 	let activeFileId = $state<number | null>(null);
 	let activeFileName = $state('desktop-actions-notes.txt');
+	let activeFileDirectory = $state('Documents/Research');
+	let documentDirty = $state(false);
+	let editorLine = $state(1);
+	let editorColumn = $state(1);
+	let editorHistory = $state<string[]>([]);
+	let editorHistoryIndex = $state(-1);
+	let terminalInput = $state('');
+	let terminalDirectory = $state('Home');
+	let terminalLines = $state<string[]>([]);
+	let terminalHistory = $state<string[]>([]);
+	let terminalHistoryIndex = $state(0);
+	let browserInput = $state('https://example.com');
+	let browserUrl = $state('https://example.com');
+	let browserHistory = $state<string[]>(['https://example.com']);
+	let browserHistoryIndex = $state(0);
+	let pathHistory = $state<string[]>(['Home']);
+	let pathHistoryIndex = $state(0);
 	let backendOnline = $state(false);
 	let filesLoading = $state(false);
 	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
+
+	runtime.registerHandler('window.editor.new', async () => {
+		await newDocument(false);
+		return 'New document created';
+	});
+	runtime.registerHandler('window.editor.save', async (input) => {
+		if (typeof input === 'string' && input.trim()) await saveDocumentAs(input.trim());
+		else await saveDocument();
+		return `Saved ${activeFileName}`;
+	});
+	runtime.registerHandler('files.create', async (input) => {
+		const value = (input ?? {}) as {
+			name?: string;
+			kind?: FileEntry['kind'];
+			parent_path?: string;
+			content?: string;
+		};
+		if (!value.name?.trim()) throw new Error('files.create requires a name');
+		const created = await osApi.createFile({
+			parent_path: value.parent_path ?? $osState.filesPath,
+			name: value.name.trim(),
+			kind: value.kind ?? 'text',
+			content: value.content
+		});
+		if (created.parent_id && (value.parent_path ?? $osState.filesPath) === $osState.filesPath)
+			await loadFiles();
+		return `Created ${created.name}`;
+	});
+	runtime.registerHandler('window.terminal.execute', async (input) => {
+		terminalInput = String(input ?? '');
+		await runTerminalCommand(false);
+		return `Executed ${String(input ?? '')}`;
+	});
+	runtime.registerHandler('window.browser.navigate', (input) => {
+		navigateBrowser(String(input ?? ''));
+		return `Navigated to ${browserUrl}`;
+	});
 
 	const desktopIcons = [
 		{ id: 'desktop.home', label: 'Home', icon: '/assets/icons/home.svg' },
@@ -197,7 +251,7 @@
 		)
 	);
 
-	onMount(() => {
+		onMount(() => {
 		const timer = window.setInterval(() => (clock = new Date()), 1000);
 		const stream = new EventSource('/api/control');
 		let backendStream: EventSource | undefined;
@@ -210,9 +264,11 @@
 		});
 		void runtime.initialize().then((connected) => {
 			backendOnline = connected;
+			resetEditorHistory(runtime.snapshot().editorText);
 			if (!connected) return;
-			loadedPath = runtime.snapshot().filesPath;
-			void loadFiles(loadedPath);
+				loadedPath = runtime.snapshot().filesPath;
+				void loadFiles(loadedPath);
+				void linkInitialDocument();
 			backendStream = osApi.commandStream();
 			backendStream.addEventListener(
 				'command',
@@ -244,7 +300,15 @@
 				event.preventDefault();
 				void runtime.dispatch('panel.overview');
 			}
-			if (event.key === 'PrintScreen') void runtime.dispatch('panel.capture');
+				if (event.key === 'PrintScreen') void runtime.dispatch('panel.capture');
+				if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+					event.preventDefault();
+					void (event.shiftKey ? saveDocumentAs() : saveDocument());
+				}
+				if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+					event.preventDefault();
+					void newDocument();
+				}
 			if (event.key === 'Escape' && $osState.overlay)
 				void runtime.dispatch(
 					`panel.${$osState.overlay === 'launcher' ? 'menu' : $osState.overlay}`
@@ -341,9 +405,33 @@
 		}
 	}
 
-	async function openPath(path: string) {
+	async function linkInitialDocument() {
+		try {
+			const items = await osApi.listFiles('Research');
+			const initial = items.find((item) => item.name === activeFileName && item.kind === 'text');
+			if (initial) {
+				activeFileId = initial.id;
+				activeFileDirectory = 'Research';
+			}
+		} catch {
+			// Keeping an unlinked document is safe; Save will offer to create it.
+		}
+	}
+
+	async function openPath(path: string, trackHistory = true) {
 		await runtime.dispatch({ node: 'files.path', input: path });
 		await loadFiles(path);
+		if (trackHistory && pathHistory[pathHistoryIndex] !== path) {
+			pathHistory = [...pathHistory.slice(0, pathHistoryIndex + 1), path];
+			pathHistoryIndex = pathHistory.length - 1;
+		}
+	}
+
+	async function navigateFiles(offset: -1 | 1) {
+		const next = pathHistoryIndex + offset;
+		if (next < 0 || next >= pathHistory.length) return;
+		pathHistoryIndex = next;
+		await openPath(pathHistory[next], false);
 	}
 
 	async function openFile(file: FileEntry) {
@@ -356,7 +444,10 @@
 			const loaded = await osApi.getFile(file.id, true);
 			activeFileId = loaded.id;
 			activeFileName = loaded.name;
+			activeFileDirectory = loaded.path.slice(0, -(loaded.name.length + 1));
 			await runtime.dispatch({ node: 'window.editor.text', input: loaded.content ?? '' });
+			documentDirty = false;
+			resetEditorHistory(loaded.content ?? '');
 			await runtime.dispatch('menu.editor.open');
 		} catch (error) {
 			await runtime.dispatch(
@@ -369,13 +460,134 @@
 		}
 	}
 
-	async function saveDocument() {
-		if (!backendOnline || activeFileId === null) {
-			await runtime.dispatch({ node: 'files.action', input: 'Document kept in desktop state' });
+	function resetEditorHistory(value: string) {
+		editorHistory = [value];
+		editorHistoryIndex = 0;
+	}
+
+	function editDocument(value: string) {
+		runtime.setEditorText(value);
+		documentDirty = true;
+		editorHistory = [...editorHistory.slice(0, editorHistoryIndex + 1), value].slice(-100);
+		editorHistoryIndex = editorHistory.length - 1;
+	}
+
+	function updateCursor(event: Event) {
+		const target = event.currentTarget as HTMLTextAreaElement;
+		const before = target.value.slice(0, target.selectionStart);
+		const lines = before.split('\n');
+		editorLine = lines.length;
+		editorColumn = (lines.at(-1)?.length ?? 0) + 1;
+	}
+
+	function undoDocument() {
+		if (editorHistoryIndex <= 0) return;
+		editorHistoryIndex -= 1;
+		runtime.setEditorText(editorHistory[editorHistoryIndex]);
+		documentDirty = true;
+	}
+
+	function redoDocument() {
+		if (editorHistoryIndex >= editorHistory.length - 1) return;
+		editorHistoryIndex += 1;
+		runtime.setEditorText(editorHistory[editorHistoryIndex]);
+		documentDirty = true;
+	}
+
+	async function newDocument(confirmDiscard = true) {
+		if (
+			confirmDiscard &&
+			documentDirty &&
+			!window.confirm(`Discard unsaved changes to ${activeFileName}?`)
+		)
+			return;
+		activeFileId = null;
+		activeFileName = 'Untitled.txt';
+		activeFileDirectory = 'Documents';
+		runtime.setEditorText('');
+		documentDirty = false;
+		resetEditorHistory('');
+		await runtime.dispatch('menu.editor.open');
+		await runtime.dispatch({ node: 'files.action', input: 'Created a new document' });
+	}
+
+	function normalizeTextFileName(value: string) {
+		return value.toLowerCase().endsWith('.txt') ? value : `${value}.txt`;
+	}
+
+	async function saveDocumentAs(suggestedName?: string) {
+		if (!backendOnline) {
+			const requested = (suggestedName ?? window.prompt('Save text file as', activeFileName))?.trim();
+			if (!requested) return;
+			activeFileName = normalizeTextFileName(requested);
+			activeFileDirectory = 'Local documents';
+			localStorage.setItem(`agentos.document.${activeFileName}`, $osState.editorText);
+			documentDirty = false;
+			await runtime.dispatch({ node: 'files.action', input: `Saved ${activeFileName} locally` });
 			return;
 		}
-		await osApi.saveFile(activeFileId, $osState.editorText);
-		await runtime.dispatch({ node: 'files.action', input: `Saved ${activeFileName}` });
+		const requested = (suggestedName ?? window.prompt('Save text file as', activeFileName))?.trim();
+		if (!requested) return;
+		const name = normalizeTextFileName(requested);
+		const parentPath = ['Recent', 'Starred', 'Trash', 'File System'].includes($osState.filesPath)
+			? 'Documents'
+			: $osState.filesPath;
+		try {
+			const created = await osApi.createFile({
+				parent_path: parentPath,
+				name,
+				kind: 'text',
+				content: $osState.editorText
+			});
+			activeFileId = created.id;
+			activeFileName = created.name;
+			activeFileDirectory = parentPath;
+			documentDirty = false;
+			await loadFiles(parentPath);
+			await runtime.dispatch({ node: 'files.action', input: `Saved ${name}` });
+		} catch (error) {
+			await runtime.dispatch(
+				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to save file' },
+				'system'
+			);
+		}
+	}
+
+	async function saveDocument() {
+		if (activeFileId === null) return saveDocumentAs();
+		try {
+			await osApi.saveFile(activeFileId, $osState.editorText);
+			documentDirty = false;
+			await runtime.dispatch({ node: 'files.action', input: `Saved ${activeFileName}` });
+		} catch (error) {
+			await runtime.dispatch(
+				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to save file' },
+				'system'
+			);
+		}
+	}
+
+	async function createTextFile() {
+		if (!backendOnline) return void newDocument();
+		const requested = window.prompt('Text file name', 'New Document.txt')?.trim();
+		if (!requested) return;
+		const name = normalizeTextFileName(requested);
+		try {
+			const created = await osApi.createFile({
+				parent_path: $osState.filesPath,
+				name,
+				kind: 'text',
+				content: ''
+			});
+			await loadFiles();
+			await openFile(created);
+			await runtime.dispatch({ node: 'files.action', input: `Created ${name}` });
+		} catch (error) {
+			await runtime.dispatch(
+				{ node: 'files.action', input: error instanceof Error ? error.message : 'Unable to create file' },
+				'system'
+			);
+		}
 	}
 
 	async function createFolder() {
@@ -430,6 +642,89 @@
 		if (fileSearchTimer) clearTimeout(fileSearchTimer);
 		fileSearchTimer = setTimeout(() => void loadFiles($osState.filesPath, value), 180);
 	}
+
+	async function runTerminalCommand(logAction = true) {
+		const raw = terminalInput.trim();
+		if (!raw) return;
+		terminalHistory = [...terminalHistory, raw];
+		terminalHistoryIndex = terminalHistory.length;
+		terminalInput = '';
+		const output: string[] = [`researcher@agentos:${terminalDirectory}$ ${raw}`];
+		const [command, ...args] = raw.split(/\s+/);
+		try {
+			if (command === 'clear') {
+				terminalLines = [];
+				return;
+			} else if (command === 'help') {
+				output.push('Commands: help, pwd, ls, cd, cat, touch, mkdir, echo, history, clear');
+			} else if (command === 'pwd') {
+				output.push(terminalDirectory === 'Home' ? '/home/agentos' : terminalDirectory);
+			} else if (command === 'history') {
+				output.push(...terminalHistory.map((item, index) => `${index + 1}  ${item}`));
+			} else if (command === 'echo') {
+				output.push(args.join(' '));
+			} else if (!backendOnline) {
+				output.push('terminal: filesystem backend is offline');
+			} else if (command === 'ls') {
+				const entries = await osApi.listFiles(args.join(' ') || terminalDirectory);
+				output.push(entries.map((item) => (item.kind === 'folder' ? `${item.name}/` : item.name)).join('  '));
+			} else if (command === 'cd') {
+				const destination = args.join(' ') || 'Home';
+				await osApi.listFiles(destination);
+				terminalDirectory = destination;
+			} else if (command === 'cat') {
+				const entries = await osApi.listFiles(terminalDirectory);
+				const file = entries.find((item) => item.name === args.join(' '));
+				if (!file || file.kind !== 'text') throw new Error(`cat: ${args.join(' ')}: not found`);
+				output.push((await osApi.getFile(file.id, true)).content ?? '');
+			} else if (command === 'touch' || command === 'mkdir') {
+				if (!args.length) throw new Error(`${command}: missing name`);
+				await osApi.createFile({
+					parent_path: terminalDirectory,
+					name: args.join(' '),
+					kind: command === 'mkdir' ? 'folder' : 'text',
+					content: command === 'touch' ? '' : undefined
+				});
+			} else {
+				output.push(`${command}: command not found. Type “help” for available commands.`);
+			}
+		} catch (error) {
+			output.push(error instanceof Error ? error.message : String(error));
+		}
+		terminalLines = [...terminalLines, ...output];
+		if (logAction)
+			await runtime.dispatch({ node: 'files.action', input: `Terminal: ${raw}` });
+	}
+
+	function browseTerminalHistory(offset: -1 | 1) {
+		terminalHistoryIndex = Math.max(0, Math.min(terminalHistory.length, terminalHistoryIndex + offset));
+		terminalInput = terminalHistory[terminalHistoryIndex] ?? '';
+	}
+
+	function normalizeBrowserUrl(value: string) {
+		const trimmed = value.trim();
+		if (!trimmed) return browserUrl;
+		if (/^https?:\/\//i.test(trimmed)) return trimmed;
+		if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) return `https://${trimmed}`;
+		return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+	}
+
+	function navigateBrowser(value = browserInput, trackHistory = true) {
+		const url = normalizeBrowserUrl(value);
+		browserUrl = url;
+		browserInput = url;
+		if (trackHistory && browserHistory[browserHistoryIndex] !== url) {
+			browserHistory = [...browserHistory.slice(0, browserHistoryIndex + 1), url];
+			browserHistoryIndex = browserHistory.length - 1;
+		}
+	}
+
+	function browseBrowserHistory(offset: -1 | 1) {
+		const next = browserHistoryIndex + offset;
+		if (next < 0 || next >= browserHistory.length) return;
+		browserHistoryIndex = next;
+		navigateBrowser(browserHistory[next], false);
+	}
 </script>
 
 <svelte:head
@@ -473,7 +768,7 @@
 				onpointerdown={(event) => beginDrag(event, 'editor')}
 			>
 				<div class="window-title">
-					{activeFileName} <span>— ~/Documents/Research</span>
+					{documentDirty ? '● ' : ''}{activeFileName} <span>— {activeFileDirectory}</span>
 				</div>
 				<div class="window-controls">
 					<button
@@ -504,41 +799,46 @@
 				</div>
 			</header>
 			<nav class="menubar" aria-label="Editor menus">
-				<button>File</button><button>Edit</button><button>View</button><button>Search</button
+				<button onclick={() => newDocument()}>File</button><button onclick={undoDocument}>Edit</button><button>View</button><button>Search</button
 				><button>Tools</button><button>Documents</button><button>Help</button>
 			</nav>
 			<div class="toolbar" aria-label="Editor toolbar">
-				<button title="New document"><img src="/assets/icons/document-new.svg" alt="" /></button
+				<button title="New document" aria-label="New document" onclick={() => newDocument()}><img src="/assets/icons/document-new.svg" alt="" /></button
 				><button title="Save document" onclick={saveDocument}
 					><img src="/assets/icons/document-save.svg" alt="" /></button
-				><span class="tool-separator"></span><button title="Undo"
+				><button class="save-as-button" title="Save document as" onclick={() => saveDocumentAs()}>Save As</button
+				><span class="tool-separator"></span><button title="Undo" aria-label="Undo" onclick={undoDocument} disabled={editorHistoryIndex <= 0}
 					><img src="/assets/icons/edit-undo.svg" alt="" /></button
-				><button title="Redo"><img src="/assets/icons/edit-redo.svg" alt="" /></button><span
+				><button title="Redo" aria-label="Redo" onclick={redoDocument} disabled={editorHistoryIndex >= editorHistory.length - 1}><img src="/assets/icons/edit-redo.svg" alt="" /></button><span
 					class="format-label">Plain Text</span
 				><img class="chevron" src="/assets/icons/go-down.svg" alt="" /><span class="tool-separator"
 				></span><span class="format-label">Spaces: 4</span>
 			</div>
 			<div class="document-tab">
-				<img src="/assets/icons/editor.svg" alt="" /><span>desktop-actions-notes.txt</span><button
-					aria-label="Close tab"><img src="/assets/icons/window-close.svg" alt="" /></button
+				<img src="/assets/icons/editor.svg" alt="" /><span>{documentDirty ? '● ' : ''}{activeFileName}</span><button
+					aria-label="Close tab" onclick={() => newDocument()}><img src="/assets/icons/window-close.svg" alt="" /></button
 				>
 			</div>
 			<div class="editor-body">
 				<div class="line-numbers" aria-hidden="true">
-					{#each Array.from({ length: 26 }, (_, index) => index + 1) as line (line)}<span
+					{#each Array.from({ length: Math.max(1, $osState.editorText.split('\n').length) }, (_, index) => index + 1) as line (line)}<span
 							>{line}</span
 						>{/each}
 				</div>
 				<textarea
-					aria-label="Research notes"
+					aria-label="Document text"
 					spellcheck="false"
 					value={$osState.editorText}
-					oninput={(event) =>
-						runtime.dispatch({ node: 'window.editor.text', input: event.currentTarget.value })}
+					oninput={(event) => {
+						editDocument(event.currentTarget.value);
+						updateCursor(event);
+					}}
+					onclick={updateCursor}
+					onkeyup={updateCursor}
 				></textarea>
 			</div>
 			<footer class="statusbar">
-				<span>Plain Text</span><span>Tab Width: 4</span><span>Ln 26, Col 1</span>
+				<span>{documentDirty ? 'Modified' : 'Saved'}</span><span>Plain Text</span><span>Tab Width: 4</span><span>Ln {editorLine}, Col {editorColumn}</span>
 			</footer>
 		</section>
 	{/if}
@@ -694,8 +994,8 @@
 				</div>
 			</header>
 			<div class="files-toolbar">
-				<button aria-label="Back"><img src="/assets/icons/go-previous.svg" alt="" /></button><button
-					aria-label="Forward"><img src="/assets/icons/go-next.svg" alt="" /></button
+				<button aria-label="Back" onclick={() => navigateFiles(-1)} disabled={pathHistoryIndex === 0}><img src="/assets/icons/go-previous.svg" alt="" /></button><button
+					aria-label="Forward" onclick={() => navigateFiles(1)} disabled={pathHistoryIndex >= pathHistory.length - 1}><img src="/assets/icons/go-next.svg" alt="" /></button
 				><span><img src="/assets/icons/go-home.svg" alt="" /> {$osState.filesPath}</span>
 				<label class="files-search"
 					><img src="/assets/icons/search.svg" alt="" /><input
@@ -705,7 +1005,8 @@
 						oninput={(event) => searchFiles(event.currentTarget.value)}
 					/></label
 				>
-				<button class="new-button" onclick={createFolder}>+ New</button>
+				<button class="new-button" onclick={createTextFile}>+ File</button>
+				<button class="new-button secondary" onclick={createFolder}>+ Folder</button>
 			</div>
 			<div class="files-body">
 				<aside>
@@ -976,6 +1277,58 @@
 		</section>
 	{/if}
 
+	{#if isVisible('browser')}
+		<section
+			class:maximized={$osState.windows.browser.maximized}
+			class="window browser-window"
+			style={windowStyle('browser')}
+			aria-label="Browser window"
+			onpointerdown={() => runtime.dispatch('window.browser')}
+		>
+			<header
+				class="titlebar"
+				role="toolbar"
+				tabindex="-1"
+				onpointerdown={(event) => beginDrag(event, 'browser')}
+			>
+				<div class="window-title">Browser</div>
+				<div class="window-controls">
+					<button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.browser.minimize');
+						}}
+						aria-label="Minimize Browser"
+						><img src="/assets/icons/window-minimize.svg" alt="" /></button
+					><button
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.browser.maximize');
+						}}
+						aria-label="Maximize Browser"
+						><img src="/assets/icons/window-maximize.svg" alt="" /></button
+					><button
+						class="close"
+						onclick={(event) => {
+							event.stopPropagation();
+							runtime.dispatch('window.browser.close');
+						}}
+						aria-label="Close Browser"><img src="/assets/icons/window-close.svg" alt="" /></button
+					>
+				</div>
+			</header>
+			<form class="browser-toolbar" onsubmit={(event) => { event.preventDefault(); navigateBrowser(); }}>
+				<button type="button" aria-label="Browser back" onclick={() => browseBrowserHistory(-1)} disabled={browserHistoryIndex === 0}>←</button>
+				<button type="button" aria-label="Browser forward" onclick={() => browseBrowserHistory(1)} disabled={browserHistoryIndex >= browserHistory.length - 1}>→</button>
+				<button type="button" aria-label="Reload page" onclick={() => { const current = browserUrl; browserUrl = 'about:blank'; requestAnimationFrame(() => browserUrl = current); }}>↻</button>
+				<input aria-label="Address and search bar" bind:value={browserInput} spellcheck="false" />
+				<button type="submit">Go</button>
+			</form>
+			<iframe title="Browser page" src={browserUrl} sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"></iframe>
+			<footer class="browser-status">{browserUrl}</footer>
+		</section>
+	{/if}
+
 	{#if isVisible('terminal')}
 		<section
 			class:maximized={$osState.windows.terminal.maximized}
@@ -1024,9 +1377,24 @@
 						minute: '2-digit'
 					})}
 				</p>
+				<div class="terminal-output" aria-live="polite">
+					{#each terminalLines as line, index (`${index}-${line}`)}<p>{line}</p>{/each}
+				</div>
 				<label
 					><strong>researcher@agentos</strong><span> ~ $ </span><input
 						aria-label="Terminal command"
+						bind:value={terminalInput}
+						onkeydown={(event) => {
+							if (event.key === 'Enter') void runTerminalCommand();
+							if (event.key === 'ArrowUp') {
+								event.preventDefault();
+								browseTerminalHistory(-1);
+							}
+							if (event.key === 'ArrowDown') {
+								event.preventDefault();
+								browseTerminalHistory(1);
+							}
+						}}
 					/></label
 				>
 			</div>
@@ -1385,13 +1753,19 @@
 				class:active={$osState.focusedWindow === 'editor'}
 				class="task-button"
 				onclick={() => runtime.dispatch('panel.editor')}
-				><img src="/assets/icons/editor.svg" alt="" /><span>desktop-actions-notes.txt</span></button
-			><button
-				class:active={$osState.focusedWindow === 'inspector'}
+					><img src="/assets/icons/editor.svg" alt="" /><span>{documentDirty ? '● ' : ''}{activeFileName}</span></button
+				><button
+					class:active={$osState.focusedWindow === 'inspector'}
 				class="task-button inspector-task"
 				onclick={() => runtime.dispatch('panel.inspector')}
-				><img src="/assets/icons/settings.svg" alt="" /><span>Control Graph Inspector</span></button
-			>
+					><img src="/assets/icons/settings.svg" alt="" /><span>Control Graph Inspector</span></button
+				>
+				{#if $osState.windows.browser.open}<button
+					class:active={$osState.focusedWindow === 'browser'}
+					class="task-button"
+					onclick={() => runtime.dispatch('window.browser')}
+					><img src="/assets/icons/browser.svg" alt="" /><span>Browser</span></button
+				>{/if}
 		</div>
 		<div class="panel-right">
 			<button

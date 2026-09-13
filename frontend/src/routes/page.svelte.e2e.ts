@@ -2,6 +2,10 @@ import { expect, test } from '@playwright/test';
 
 test.use({ viewport: { width: 1440, height: 1024 }, deviceScaleFactor: 1 });
 
+test.beforeEach(async ({ request }) => {
+	await request.put('/backend-api/state', { data: { value: {} } });
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {
@@ -11,11 +15,17 @@ test('desktop shell renders and routes human and remote commands', async ({ page
 	await page.goto('/');
 	await page.evaluate(() => document.fonts.ready);
 	await expect(page.getByRole('main', { name: 'AgentOS desktop' })).toBeVisible();
+	await page.evaluate(() =>
+		window.dispatchEvent(new CustomEvent('agentos:command', { detail: { node: 'panel.editor' } }))
+	);
+	await page.evaluate(() =>
+		window.dispatchEvent(new CustomEvent('agentos:command', { detail: { node: 'panel.inspector' } }))
+	);
 	await expect(page.getByRole('region', { name: 'Text Editor window' })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Control Graph Inspector window' })).toBeVisible();
 	await page.screenshot({ path: 'artifacts/implementation-1440x1024.png' });
 
-	await page.getByRole('button', { name: 'Network' }).click();
+	await page.getByRole('button', { name: 'Network', exact: true }).click();
 	await expect(page.getByRole('region', { name: 'Wi-Fi controls' })).toBeVisible();
 	await page.getByRole('button', { name: 'PineHouse Good' }).click();
 	await expect(page.getByRole('button', { name: 'PineHouse Connected' })).toBeVisible();
@@ -75,4 +85,58 @@ test('core desktop surfaces share state and remain keyboard accessible', async (
 	await page.getByRole('button', { name: 'Screen capture' }).click();
 	await expect(page.getByRole('region', { name: 'Screen capture' })).toBeVisible();
 	await page.screenshot({ path: 'artifacts/expanded-desktop-1440x1024.png' });
+});
+
+test('text files can be created, edited, saved, reopened and edited again', async ({ page }) => {
+	await page.goto('/');
+	const name = `agent-note-${Date.now()}.txt`;
+
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Files' })
+		.click();
+	await expect(page.getByRole('region', { name: 'Files window' })).toBeVisible();
+	page.once('dialog', (dialog) => dialog.accept(name));
+	await page.getByRole('button', { name: '+ File' }).click();
+
+	const editor = page.getByRole('region', { name: 'Text Editor window' });
+	await expect(editor).toBeVisible();
+	await expect(editor).toContainText(name);
+	const document = page.getByRole('textbox', { name: 'Document text' });
+	await document.fill('First line\nSecond line');
+	await page.getByRole('button', { name: 'Save document' }).click();
+	await expect(editor).toContainText('Saved');
+
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Files' })
+		.click();
+	await page.getByRole('textbox', { name: 'Search files' }).fill(name);
+	const file = page
+		.getByRole('region', { name: 'Files window' })
+		.getByRole('button', { name: new RegExp(name) });
+	await expect(file).toBeVisible();
+	await file.dblclick();
+	await expect(document).toHaveValue('First line\nSecond line');
+
+	await document.fill('Updated and persisted');
+	await document.press('Control+s');
+	await expect(editor).toContainText('Saved');
+});
+
+test('terminal executes commands against the virtual filesystem', async ({ page }) => {
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Terminal' })
+		.click();
+	const terminal = page.getByRole('region', { name: 'Terminal window' });
+	await expect(terminal).toBeVisible();
+	const input = page.getByRole('textbox', { name: 'Terminal command' });
+	await input.fill('pwd');
+	await input.press('Enter');
+	await expect(terminal).toContainText('/home/agentos');
+	await input.fill('help');
+	await input.press('Enter');
+	await expect(terminal).toContainText('Commands: help, pwd, ls, cd, cat, touch, mkdir, echo, history, clear');
 });

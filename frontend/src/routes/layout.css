@@ -137,6 +137,54 @@ textarea:focus-visible {
 	width: 690px;
 	height: 510px;
 }
+.browser-window {
+	width: 860px;
+	height: 610px;
+}
+.browser-toolbar {
+	display: flex;
+	flex: 0 0 45px;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 9px;
+	border-bottom: 1px solid #191a1a;
+}
+.browser-toolbar button {
+	height: 30px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 4px;
+	background: #3a3d3c;
+}
+.browser-toolbar button:disabled {
+	opacity: 0.35;
+}
+.browser-toolbar input {
+	min-width: 0;
+	height: 30px;
+	flex: 1;
+	padding: 0 11px;
+	border: 1px solid #4c4f4e;
+	border-radius: 5px;
+	background: #202323;
+	color: var(--text);
+}
+.browser-window iframe {
+	width: 100%;
+	min-height: 0;
+	flex: 1;
+	border: 0;
+	background: white;
+}
+.browser-status {
+	flex: 0 0 22px;
+	overflow: hidden;
+	padding: 3px 9px;
+	color: var(--muted);
+	font-size: 10px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .titlebar {
 	position: relative;
 	display: flex;
@@ -1085,6 +1133,19 @@ textarea:focus-visible {
 	background: #477954;
 	font-weight: 650;
 }
+.files-toolbar .new-button.secondary {
+	background: #3c4740;
+}
+.files-toolbar button:disabled,
+.toolbar button:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+.toolbar .save-as-button {
+	width: auto;
+	padding: 0 8px;
+	font-size: 10px;
+}
 .files-body aside button.active {
 	background: #3c5041;
 	color: #9ee0aa;
@@ -1464,6 +1525,7 @@ textarea:focus-visible {
 	place-items: center;
 }
 .terminal-body {
+	overflow: auto;
 	flex: 1;
 	padding: 18px 20px;
 	background: #151b18;
@@ -1472,6 +1534,13 @@ textarea:focus-visible {
 		13px 'DejaVu Sans Mono',
 		monospace;
 	user-select: text;
+}
+.terminal-output {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.terminal-output p {
+	color: #b8c2bb;
 }
 .terminal-body p {
 	margin: 0 0 6px;

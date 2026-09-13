@@ -123,6 +123,15 @@ export const initialState: OSState = {
 			y: 210,
 			z: 1,
 			workspace: 1
+		},
+		browser: {
+			open: false,
+			minimized: false,
+			maximized: false,
+			x: 280,
+			y: 130,
+			z: 1,
+			workspace: 1
 		}
 	}
 };
@@ -280,6 +289,7 @@ export function createOSRuntime() {
 	let eventId = seedEvents.length;
 	let persistState = false;
 	let persistTimer: ReturnType<typeof setTimeout> | undefined;
+	const externalHandlers = new Map<string, (input: unknown) => Promise<string> | string>();
 
 	async function initialize() {
 		try {
@@ -434,9 +444,9 @@ export function createOSRuntime() {
 				state.update((current) => ({ ...current, overlay: null }));
 				return 'Software opened';
 			case 'menu.browser.open':
+				focusWindow('browser');
 				state.update((current) => ({ ...current, overlay: null }));
-				toast('Browser launched');
-				return 'Browser launch simulated';
+				return 'Browser opened';
 			case 'panel.sound':
 				state.update((current) => ({
 					...current,
@@ -547,8 +557,10 @@ export function createOSRuntime() {
 				}));
 				return `${get(state).inspectorTab} tab selected`;
 			default:
+				if (externalHandlers.has(command.node))
+					return await externalHandlers.get(command.node)!(command.input);
 				if (
-					/^window\.(editor|inspector|files|settings|software|terminal)\.(minimize|maximize|close)$/.test(
+					/^window\.(editor|inspector|files|settings|software|terminal|browser)\.(minimize|maximize|close)$/.test(
 						command.node
 					)
 				) {
@@ -563,7 +575,7 @@ export function createOSRuntime() {
 					if (action === 'close') updateWindow(name, { open: false });
 					return `${name} ${action}d`;
 				}
-				if (/^window\.(editor|inspector|files|settings|software|terminal)$/.test(command.node)) {
+				if (/^window\.(editor|inspector|files|settings|software|terminal|browser)$/.test(command.node)) {
 					focusWindow(command.node.split('.')[1] as WindowName);
 					return `${command.node} focused`;
 				}
@@ -617,11 +629,25 @@ export function createOSRuntime() {
 		updateWindow(name, { x, y });
 	}
 
+	// High-frequency text editing should update the shared state without creating
+	// one control-graph event per keystroke. Explicit agent-driven text changes
+	// still go through window.editor.text and remain observable.
+	function setEditorText(editorText: string) {
+		state.update((current) => ({ ...current, editorText }));
+	}
+
+	function registerHandler(node: string, handler: (input: unknown) => Promise<string> | string) {
+		externalHandlers.set(node, handler);
+		return () => externalHandlers.delete(node);
+	}
+
 	return {
 		state,
 		events,
 		dispatch,
 		moveWindow,
+		setEditorText,
+		registerHandler,
 		initialize,
 		graph: controlGraph,
 		snapshot: () => get(state)

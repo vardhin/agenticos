@@ -170,6 +170,20 @@ export const controlGraph: ControlNode[] = [
 		description: 'Update editor text'
 	},
 	{
+		id: 'window.editor.new',
+		label: 'New text document',
+		kind: 'action',
+		parentId: 'window.editor',
+		description: 'Create a blank unsaved text document'
+	},
+	{
+		id: 'window.editor.save',
+		label: 'Save text document',
+		kind: 'input',
+		parentId: 'window.editor',
+		description: 'Save the active document; input may provide a new filename'
+	},
+	{
 		id: 'window.editor.minimize',
 		label: 'Minimize editor',
 		kind: 'action',
@@ -317,6 +331,27 @@ export const controlGraph: ControlNode[] = [
 		description: 'Launch the web browser'
 	},
 	{
+		id: 'window.browser',
+		label: 'Browser window',
+		kind: 'window',
+		parentId: 'desktop',
+		description: 'Navigate the embedded web browser'
+	},
+	{
+		id: 'window.browser.navigate',
+		label: 'Navigate Browser',
+		kind: 'input',
+		parentId: 'window.browser',
+		description: 'Navigate to a URL or search query'
+	},
+	...['minimize', 'maximize', 'close'].map((action) => ({
+		id: `window.browser.${action}`,
+		label: `${action[0].toUpperCase()}${action.slice(1)} Browser`,
+		kind: 'action' as const,
+		parentId: 'window.browser',
+		description: `${action[0].toUpperCase()}${action.slice(1)} the Browser window`
+	})),
+	{
 		id: 'menu.settings.open',
 		label: 'Open Settings',
 		kind: 'action',
@@ -429,6 +464,13 @@ export const controlGraph: ControlNode[] = [
 		description: 'Perform a simulated file operation'
 	},
 	{
+		id: 'files.create',
+		label: 'Create file or folder',
+		kind: 'input',
+		parentId: 'window.files',
+		description: 'Create an item with {name, kind, parent_path, content}'
+	},
+	{
 		id: 'window.settings',
 		label: 'Settings window',
 		kind: 'window',
@@ -490,6 +532,13 @@ export const controlGraph: ControlNode[] = [
 		kind: 'window',
 		parentId: 'desktop',
 		description: 'Terminal session'
+	},
+	{
+		id: 'window.terminal.execute',
+		label: 'Execute terminal command',
+		kind: 'input',
+		parentId: 'window.terminal',
+		description: 'Execute a command in the virtual terminal'
 	},
 	{
 		id: 'window.terminal.minimize',

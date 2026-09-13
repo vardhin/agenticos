@@ -26,7 +26,14 @@ export interface WindowState {
 	workspace: number;
 }
 
-export type WindowName = 'editor' | 'inspector' | 'files' | 'settings' | 'software' | 'terminal';
+export type WindowName =
+	| 'editor'
+	| 'inspector'
+	| 'files'
+	| 'settings'
+	| 'software'
+	| 'terminal'
+	| 'browser';
 export type OverlayName =
 	'launcher' | 'overview' | 'control' | 'clipboard' | 'capture' | 'power' | null;
 
