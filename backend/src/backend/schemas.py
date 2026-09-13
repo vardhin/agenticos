@@ -72,3 +72,13 @@ class CommandCreate(BaseModel):
     source: Literal["human", "remote", "system"] = "remote"
 
     model_config = ConfigDict(extra="forbid")
+
+
+class CompileRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
+    references: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ActionExecuteRequest(BaseModel):
+    args: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False

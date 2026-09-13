@@ -14,7 +14,9 @@ from fastapi.responses import StreamingResponse
 from .database import Database
 from .filesystem import VirtualFilesystem
 from .schemas import (
+    ActionExecuteRequest,
     CommandCreate,
+    CompileRequest,
     ContentUpdate,
     EventCreate,
     FileCreate,
@@ -22,6 +24,8 @@ from .schemas import (
     StatePatch,
     StateUpdate,
 )
+from .compiler import AmbiguousReferenceError, CompileError, TaskCompiler
+from .environment import ActionProposal as EnvironmentProposal
 from .wifi import (
     ActionProposal,
     IntentError,
@@ -39,6 +43,7 @@ filesystem = VirtualFilesystem(database)
 command_subscribers: set[asyncio.Queue[str]] = set()
 wifi_adapter = SimulatedWifiAdapter()
 wifi_orchestrator = WifiOrchestrator(wifi_adapter)
+task_compiler = TaskCompiler()
 
 
 @asynccontextmanager
@@ -75,7 +80,74 @@ async def get_wifi_state():
 
 @app.get("/api/wifi/actions", tags=["wifi"])
 async def get_wifi_actions():
-    return {"items": [registered.spec for registered in wifi_orchestrator.doer.registry.values()]}
+    endpoints = {
+        "wifi.enable": "/api/wifi/enable",
+        "wifi.disable": "/api/wifi/disable",
+        "wifi.scan": "/api/wifi/scan",
+        "wifi.connect": "/api/wifi/connect",
+        "wifi.disconnect": "/api/wifi/disconnect",
+        "wifi.forget": "/api/wifi/forget",
+        "wifi.test_internet": "/api/wifi/test-internet",
+    }
+    items = []
+    for spec in wifi_orchestrator.doer.registry.discover():
+        item = spec.model_dump(mode="json")
+        # Preserve the v1 discovery fields while exposing the uniform v2 contract.
+        item["expected_latency"] = item["latency"]
+        item["endpoint"] = endpoints[spec.id]
+        items.append(item)
+    return {
+        "environment_version": wifi_orchestrator.doer.registry.environment_version,
+        "semantics_version": wifi_orchestrator.doer.registry.semantics_version,
+        "items": items,
+    }
+
+
+@app.get("/api/actions", tags=["agent"])
+async def get_actions():
+    registry = wifi_orchestrator.doer.registry
+    return {
+        "environment_version": registry.environment_version,
+        "semantics_version": registry.semantics_version,
+        "items": [spec.model_dump(mode="json") for spec in registry.discover()],
+    }
+
+
+@app.get("/api/environment/state", tags=["agent"])
+async def get_environment_state():
+    state = wifi_adapter.observe_environment()
+    return {**state.model_dump(mode="json"), "state_hash": state.state_hash()}
+
+
+@app.post("/api/agent/compile", tags=["agent"])
+async def compile_agent_task(value: CompileRequest):
+    try:
+        compiled = task_compiler.compile(value.command, value.references)
+    except AmbiguousReferenceError as exc:
+        raise HTTPException(
+            409,
+            detail={"type": "ambiguous_reference", "reference": exc.reference, "candidates": exc.candidates},
+        ) from exc
+    except CompileError as exc:
+        raise HTTPException(422, detail={"type": "compile_error", "message": str(exc)}) from exc
+    return {
+        "source": compiled.source,
+        "expression": compiled.expression.as_dict(),
+        "parameters": compiled.parameters,
+        "automaton": compiled.automaton.model_dump(mode="json") if compiled.automaton else None,
+        "requires_fallback": compiled.requires_fallback,
+    }
+
+
+@app.post("/api/actions/{action_id}/execute", tags=["agent"])
+async def execute_registered_action(action_id: str, value: ActionExecuteRequest):
+    result = wifi_orchestrator.doer.generic.execute(
+        EnvironmentProposal(action=action_id, args=value.args, confirmed=value.confirmed)
+    )
+    if result.status in {"failed", "confirmation_required"}:
+        status_code = 428 if result.status == "confirmation_required" else 409
+        raise HTTPException(status_code, detail=result.model_dump(mode="json"))
+    return result
 
 
 def execute_wifi_action(proposal: ActionProposal, *, confirmed: bool = False):
@@ -119,6 +191,11 @@ async def forget_wifi(target: WifiTarget, confirmed: bool = False):
         ActionProposal(action=WifiActionId.FORGET, args={"ssid": target.ssid}),
         confirmed=confirmed,
     )
+
+
+@app.post("/api/wifi/test-internet", tags=["wifi"])
+async def test_wifi_internet():
+    return execute_wifi_action(ActionProposal(action=WifiActionId.TEST_INTERNET))
 
 
 @app.post("/api/agent/tasks", response_model=TaskResult, tags=["agent"])

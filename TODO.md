@@ -7,27 +7,27 @@ Status legend: `[x]` means a usable endpoint or control node already exists; it 
 ## 0. Non-negotiable architecture
 
 - [ ] Define one environment contract shared by every domain:
-  - [ ] State variables and observation function
-  - [ ] Goals and goal-satisfaction predicates
-  - [ ] Actions with typed arguments
-  - [ ] Preconditions and postconditions
-  - [ ] Effects and affected state fields
-  - [ ] Cost, latency, risk, reversibility, and confirmation metadata
-  - [ ] Simulator binding and real UI/OS binding
-  - [ ] Structured success and failure results
+  - [x] State variables and observation function
+  - [x] Goals and goal-satisfaction predicates
+  - [x] Actions with typed arguments
+  - [x] Preconditions and postconditions
+  - [x] Effects and affected state fields
+  - [x] Cost, latency, risk, reversibility, and confirmation metadata
+  - [x] Simulator binding and real UI/OS binding
+  - [x] Structured success and failure results
 - [ ] Keep the control boundary strict:
-  - [ ] Compiler emits goals, milestones, parameters, and constraints—not action sequences
-  - [ ] RL/policies return action proposals—not side effects
-  - [ ] Planner validates every proposal against current observed state
-  - [ ] Doer is the only component allowed to execute an action
-  - [ ] Observer verifies state after every action
-  - [ ] Failed verification returns control to the planner/policy
-- [ ] Replace per-feature orchestration with a domain-independent observe → propose → validate → act → verify loop.
-- [ ] Store learned policies separately from action handlers so policies can be retrained safely.
-- [ ] Train against simulators; never explore destructively against the live desktop.
-- [ ] Add deterministic seeds, policy versioning, reward configuration, and reproducible training logs.
-- [ ] Add maximum-step, timeout, cycle-detection, and cumulative-risk limits.
-- [ ] Require confirmation immediately before irreversible or high-risk actions.
+  - [x] Compiler emits goals, milestones, parameters, and constraints—not action sequences
+  - [x] RL/policies return action proposals—not side effects
+  - [x] Planner validates every proposal against current observed state
+  - [x] Doer is the only component allowed to execute an action
+  - [x] Observer verifies state after every action
+  - [x] Failed verification returns control to the planner/policy
+- [ ] Replace per-feature orchestration with a domain-independent observe → propose → validate → act → verify loop. (The shared loop exists and Wi-Fi actions use its contract; remaining domains still need migration.)
+- [x] Store learned policies separately from action handlers so policies can be retrained safely.
+- [x] Train against simulators; never explore destructively against the live desktop.
+- [x] Add deterministic seeds, policy versioning, reward configuration, and reproducible training logs.
+- [x] Add maximum-step, timeout, cycle-detection, and cumulative-risk limits.
+- [x] Require confirmation immediately before irreversible or high-risk actions.
 - [ ] Make every task cancelable between actions.
 
 ## 1. Agent-operable action tree
@@ -172,7 +172,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [x] `wifi.connect(ssid)`
   - [x] `wifi.disconnect`
   - [x] `wifi.forget(ssid)` — confirmation required
-  - [ ] `wifi.test_internet`
+  - [x] `wifi.test_internet`
   - [ ] `wifi.measure_latency`
   - [ ] `wifi.measure_throughput`
 - [ ] `bluetooth`
@@ -229,7 +229,7 @@ Each leaf below should become a registered action with the uniform contract.
 ## 2. Factored environment state
 
 - [ ] Add stable IDs for apps, windows, workspaces, files, devices, networks, tabs, and notifications.
-- [ ] Add task working memory for captured values without copying entire OS state into the policy.
+- [x] Add task working memory for captured values without copying entire OS state into the policy.
 - [ ] Model at minimum:
   - [ ] Focused app/window and open/minimized/maximized state
   - [ ] Current workspace and window membership
@@ -238,40 +238,40 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] Clipboard current item and history metadata
   - [ ] Network, Bluetooth, audio, display, theme, and DND state
   - [ ] Running task, task progress, pending confirmation, and last failure
-- [ ] Hash/canonicalize factored states for tabular policies.
-- [ ] Add partial-observation markers instead of treating unknown values as false.
-- [ ] Record before/after state diffs for every action.
+- [x] Hash/canonicalize factored states for tabular policies.
+- [x] Add partial-observation markers instead of treating unknown values as false.
+- [x] Record before/after state diffs for every action.
 
 ## 3. Task compiler and ordered goals
 
 - [ ] Replace feature-specific regex entry points with a small compositional grammar.
 - [ ] Support operators:
-  - [ ] `SEQUENCE(A, B, ...)`
-  - [ ] `AND(A, B, ...)`
-  - [ ] `OR(A, B, ...)`
-  - [ ] `NOT(A)`
-  - [ ] `UNTIL(condition, action)`
-  - [ ] `IF(condition, then, else)`
-  - [ ] `PRESERVE(condition)`
-  - [ ] `CONFIRM_BEFORE(action)`
-- [ ] Support references: `it`, `there`, `that file`, `current item`, `previous result`.
-- [ ] Support parameter extraction for quoted names, paths, percentages, SSIDs, app names, and durations.
-- [ ] Compile instructions into semantic milestones/task automata—not action lists.
-- [ ] Return structured ambiguity when a reference has multiple valid targets.
-- [ ] Keep an LLM adapter optional and outside the execution loop for unsupported language only.
+  - [x] `SEQUENCE(A, B, ...)`
+  - [x] `AND(A, B, ...)`
+  - [x] `OR(A, B, ...)`
+  - [x] `NOT(A)`
+  - [x] `UNTIL(condition, action)`
+  - [x] `IF(condition, then, else)`
+  - [x] `PRESERVE(condition)`
+  - [x] `CONFIRM_BEFORE(action)`
+- [x] Support references: `it`, `there`, `that file`, `current item`, `previous result`.
+- [x] Support parameter extraction for quoted names, paths, percentages, SSIDs, app names, and durations.
+- [x] Compile instructions into semantic milestones/task automata—not action lists.
+- [x] Return structured ambiguity when a reference has multiple valid targets.
+- [x] Keep an LLM adapter optional and outside the execution loop for unsupported language only.
 
 ## 4. RL and planning infrastructure
 
 - [x] Train a tabular Q-learning policy over an ordered task automaton.
 - [x] Use a simulator for training and the deterministic Doer for live execution.
 - [x] Include irrelevant actions so the first policy must discover a path rather than replay one.
-- [ ] Generate the simulator from registered preconditions/effects instead of handwritten transitions.
-- [ ] Make action-space discovery dynamic from the registry.
-- [ ] Add sparse terminal reward, milestone reward, step cost, failure penalty, and risk penalty.
-- [ ] Add replayable training traces and Q-table inspection to the Control Graph Inspector.
-- [ ] Cache trained policies by `(environment_version, task_automaton, constraints)`.
-- [ ] Invalidate policies when action semantics or environment version changes.
-- [ ] Compare Q-learning against BFS/A* on deterministic tasks.
+- [x] Generate the simulator from registered preconditions/effects instead of handwritten transitions.
+- [x] Make action-space discovery dynamic from the registry.
+- [x] Add sparse terminal reward, milestone reward, step cost, failure penalty, and risk penalty.
+- [ ] Add replayable training traces and Q-table inspection to the Control Graph Inspector. (Training traces and inspectable Q-tables exist in the backend; Inspector UI pending.)
+- [x] Cache trained policies by `(environment_version, task_automaton, constraints)`.
+- [x] Invalidate policies when action semantics or environment version changes.
+- [x] Compare Q-learning against BFS/A* on deterministic tasks.
 - [ ] Add stochastic action outcomes and compare Q-learning against deterministic planning.
 - [ ] Add goal-conditioned state representation so one policy can serve multiple filenames/paths.
 - [ ] Add recovery actions and re-plan after live state divergence.

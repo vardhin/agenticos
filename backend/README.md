@@ -28,4 +28,24 @@ The Wi-Fi endpoints currently use a deterministic simulated adapter. All operati
 through the action registry and Doer, so a NetworkManager adapter can replace the simulator
 without changing the planner or command compiler.
 
+## Uniform environment contract
+
+`backend.environment` is the domain-independent control boundary. It provides factored
+observations (including explicit unknown fields and task working memory), semantic goals and
+ordered milestones, typed registered actions, generated simulation, structured state diffs,
+and the bounded observe → propose → validate → act → verify execution loop. Policies only
+return proposals; `Doer` is the sole mutation boundary.
+
+The generic discovery and inspection endpoints are:
+
+- `GET /api/actions` — action metadata plus environment/semantics versions
+- `GET /api/environment/state` — canonical factored observation and state hash
+- `POST /api/agent/compile` — constrained language/DSL to semantic task automata
+- `POST /api/actions/{action_id}/execute` — validated, confirmed, verified execution
+
+`backend.compiler` supports `SEQUENCE`, `AND`, `OR`, `NOT`, `UNTIL`, `IF`, `PRESERVE`, and
+`CONFIRM_BEFORE`, with structured reference ambiguity. `backend.planning` supplies seeded
+tabular Q-learning, replayable traces, semantics-aware policy caching, and BFS/A* baselines.
+Training operates only on a simulator generated from registry effects.
+
 Run tests with `uv run pytest`.

@@ -137,3 +137,37 @@ def test_unsupported_command_stops_before_execution() -> None:
             assert wifi_adapter.observe().enabled is False
 
     asyncio.run(scenario())
+
+
+def test_uniform_registry_state_compile_and_execute_endpoints() -> None:
+    wifi_adapter.reset()
+
+    async def scenario() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            actions = (await client.get("/api/actions")).json()
+            assert actions["environment_version"] == "agentos-wifi-v2"
+            assert len(actions["semantics_version"]) == 16
+            assert "wifi.enable" in [item["id"] for item in actions["items"]]
+
+            observed = (await client.get("/api/environment/state")).json()
+            assert observed["fields"]["wifi"]["enabled"] is False
+            assert len(observed["state_hash"]) == 64
+
+            compiled = await client.post(
+                "/api/agent/compile", json={"command": "connect to StudioNet"}
+            )
+            assert compiled.status_code == 200
+            assert compiled.json()["automaton"]["milestones"][0]["goals"][0]["predicate"]["field"] == "wifi.ssid"
+
+            enabled = await client.post("/api/actions/wifi.enable/execute", json={})
+            assert enabled.status_code == 200
+            assert enabled.json()["verified"] is True
+            assert enabled.json()["state_diff"][0]["field"] == "wifi.enabled"
+
+            denied = await client.post(
+                "/api/actions/wifi.forget/execute", json={"args": {"ssid": "StudioNet"}}
+            )
+            assert denied.status_code == 428
+
+    asyncio.run(scenario())
