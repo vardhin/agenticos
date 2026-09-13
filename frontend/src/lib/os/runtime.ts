@@ -1,6 +1,6 @@
 import { get, writable } from 'svelte/store';
 import { controlGraph, nodeById } from './graph';
-import { osApi } from './api';
+import { osApi, type WifiObservedState } from './api';
 import type {
 	ActionEvent,
 	CommandSource,
@@ -636,6 +636,34 @@ export function createOSRuntime() {
 		state.update((current) => ({ ...current, editorText }));
 	}
 
+	function applyWifiObservation(observation: WifiObservedState) {
+		state.update((current) => ({
+			...current,
+			wifiEnabled: observation.enabled,
+			connectedNetwork: observation.ssid
+		}));
+	}
+
+	function recordObservedAction(
+		node: string,
+		result: ActionEvent['result'],
+		detail: string,
+		durationMs = 0
+	) {
+		const event: ActionEvent = {
+			id: ++eventId,
+			time: now(),
+			source: 'system',
+			node,
+			result,
+			detail,
+			durationMs
+		};
+		events.update((items) => [event, ...items].slice(0, 120));
+		state.update((current) => ({ ...current, focusedNode: node }));
+		if (persistState) void osApi.logEvent(event).catch(() => undefined);
+	}
+
 	function registerHandler(node: string, handler: (input: unknown) => Promise<string> | string) {
 		externalHandlers.set(node, handler);
 		return () => externalHandlers.delete(node);
@@ -647,6 +675,8 @@ export function createOSRuntime() {
 		dispatch,
 		moveWindow,
 		setEditorText,
+		applyWifiObservation,
+		recordObservedAction,
 		registerHandler,
 		initialize,
 		graph: controlGraph,

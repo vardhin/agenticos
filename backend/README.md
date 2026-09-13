@@ -20,5 +20,12 @@ Useful endpoints:
 - `GET /api/files/search?q=...`, `GET/PUT /api/files/{id}/content` (JSON text or raw bytes)
 - `GET/POST /api/events`
 - `GET/POST /api/control` (SSE subscriber / command publisher)
+- `GET /api/wifi/state`, `GET /api/wifi/actions`
+- `POST /api/wifi/{enable,disable,scan,connect,disconnect,forget}`
+- `POST /api/agent/tasks` (compile, plan, execute, and verify deterministic Wi-Fi goals)
+
+The Wi-Fi endpoints currently use a deterministic simulated adapter. All operations pass
+through the action registry and Doer, so a NetworkManager adapter can replace the simulator
+without changing the planner or command compiler.
 
 Run tests with `uv run pytest`.

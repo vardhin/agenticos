@@ -13,12 +13,32 @@ from fastapi.responses import StreamingResponse
 
 from .database import Database
 from .filesystem import VirtualFilesystem
-from .schemas import CommandCreate, ContentUpdate, EventCreate, FileCreate, FileUpdate, StatePatch, StateUpdate
+from .schemas import (
+    CommandCreate,
+    ContentUpdate,
+    EventCreate,
+    FileCreate,
+    FileUpdate,
+    StatePatch,
+    StateUpdate,
+)
+from .wifi import (
+    ActionProposal,
+    IntentError,
+    SimulatedWifiAdapter,
+    TaskRequest,
+    TaskResult,
+    WifiActionId,
+    WifiOrchestrator,
+    WifiTarget,
+)
 
 
 database = Database()
 filesystem = VirtualFilesystem(database)
 command_subscribers: set[asyncio.Queue[str]] = set()
+wifi_adapter = SimulatedWifiAdapter()
+wifi_orchestrator = WifiOrchestrator(wifi_adapter)
 
 
 @asynccontextmanager
@@ -46,6 +66,67 @@ app.add_middleware(
 @app.get("/api/health", tags=["system"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "database": str(database.path)}
+
+
+@app.get("/api/wifi/state", tags=["wifi"])
+async def get_wifi_state():
+    return wifi_adapter.observe()
+
+
+@app.get("/api/wifi/actions", tags=["wifi"])
+async def get_wifi_actions():
+    return {"items": [registered.spec for registered in wifi_orchestrator.doer.registry.values()]}
+
+
+def execute_wifi_action(proposal: ActionProposal, *, confirmed: bool = False):
+    result = wifi_orchestrator.doer.execute(proposal, confirmed=confirmed)
+    if result.status == "failed":
+        raise HTTPException(
+            409,
+            detail={"message": result.message, "state": result.observed_state.model_dump()},
+        )
+    return result
+
+
+@app.post("/api/wifi/enable", tags=["wifi"])
+async def enable_wifi():
+    return execute_wifi_action(ActionProposal(action=WifiActionId.ENABLE))
+
+
+@app.post("/api/wifi/disable", tags=["wifi"])
+async def disable_wifi():
+    return execute_wifi_action(ActionProposal(action=WifiActionId.DISABLE))
+
+
+@app.post("/api/wifi/scan", tags=["wifi"])
+async def scan_wifi():
+    return execute_wifi_action(ActionProposal(action=WifiActionId.SCAN))
+
+
+@app.post("/api/wifi/connect", tags=["wifi"])
+async def connect_wifi(target: WifiTarget):
+    return execute_wifi_action(ActionProposal(action=WifiActionId.CONNECT, args={"ssid": target.ssid}))
+
+
+@app.post("/api/wifi/disconnect", tags=["wifi"])
+async def disconnect_wifi():
+    return execute_wifi_action(ActionProposal(action=WifiActionId.DISCONNECT))
+
+
+@app.post("/api/wifi/forget", tags=["wifi"])
+async def forget_wifi(target: WifiTarget, confirmed: bool = False):
+    return execute_wifi_action(
+        ActionProposal(action=WifiActionId.FORGET, args={"ssid": target.ssid}),
+        confirmed=confirmed,
+    )
+
+
+@app.post("/api/agent/tasks", response_model=TaskResult, tags=["agent"])
+async def run_agent_task(task: TaskRequest):
+    try:
+        return wifi_orchestrator.run(task.command)
+    except IntentError as exc:
+        raise HTTPException(422, detail={"message": str(exc), "route": "unsupported"}) from exc
 
 
 def load_state() -> dict[str, Any]:

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { formatFileMeta, osApi, type FileEntry } from '$lib/os/api';
+	import { formatFileMeta, osApi, type AgentTaskResult, type FileEntry } from '$lib/os/api';
 	import { createOSRuntime } from '$lib/os/runtime';
 	import type { OSCommand, WindowName } from '$lib/os/types';
 
@@ -34,6 +34,9 @@
 	let pathHistoryIndex = $state(0);
 	let backendOnline = $state(false);
 	let filesLoading = $state(false);
+	let intentRunning = $state(false);
+	let intentResult = $state<AgentTaskResult | null>(null);
+	let intentError = $state<string | null>(null);
 	let fileSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	runtime.registerHandler('window.editor.new', async () => {
@@ -251,7 +254,32 @@
 		)
 	);
 
-		onMount(() => {
+	async function submitLauncherIntent() {
+		const command = $osState.menuSearch.trim();
+		if (!command || intentRunning) return;
+		intentRunning = true;
+		intentResult = null;
+		intentError = null;
+		try {
+			const result = await osApi.runAgentTask(command);
+			intentResult = result;
+			runtime.applyWifiObservation(result.final_state);
+			for (const execution of result.executions) {
+				runtime.recordObservedAction(
+					execution.action,
+					execution.status === 'succeeded' ? 'ok' : 'error',
+					execution.message
+				);
+			}
+			if (result.status === 'failed') intentError = result.error ?? 'The goal was not reached';
+		} catch (error) {
+			intentError = error instanceof Error ? error.message : String(error);
+		} finally {
+			intentRunning = false;
+		}
+	}
+
+	onMount(() => {
 		const timer = window.setInterval(() => (clock = new Date()), 1000);
 		const stream = new EventSource('/api/control');
 		let backendStream: EventSource | undefined;
@@ -1413,10 +1441,40 @@
 					aria-label="Search applications"
 					placeholder="Search apps, files, settings and actions…"
 					value={$osState.menuSearch}
-					oninput={(event) =>
-						runtime.dispatch({ node: 'menu.search', input: event.currentTarget.value })}
+					oninput={(event) => {
+						intentResult = null;
+						intentError = null;
+						runtime.dispatch({ node: 'menu.search', input: event.currentTarget.value });
+					}}
+					onkeydown={(event) => {
+						if (event.key === 'Enter') {
+							event.preventDefault();
+							void submitLauncherIntent();
+						}
+					}}
 				/><kbd>esc</kbd></label
 			>
+			{#if intentRunning || intentResult || intentError}
+				<div class:failed={Boolean(intentError)} class="intent-result" role="status" aria-live="polite">
+					{#if intentRunning}
+						<span class="intent-spinner"></span><strong>Resolving intent…</strong>
+					{:else if intentError}
+						<span>!</span><div><strong>Couldn’t complete that</strong><small>{intentError}</small></div>
+					{:else if intentResult}
+						<span>✓</span><div
+							><strong>{intentResult.executions.length === 0
+									? 'Already done'
+									: intentResult.executions.at(-1)?.message}</strong
+							><small
+								>{intentResult.route} · {intentResult.executions.length} action{intentResult
+									.executions.length === 1
+									? ''
+									: 's'}</small
+							></div
+						>
+					{/if}
+				</div>
+			{/if}
 			<div class="search-layout">
 				<aside>
 					<button class="active">All</button><button>Applications</button><button>Files</button

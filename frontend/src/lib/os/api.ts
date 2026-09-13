@@ -17,6 +17,32 @@ export interface FileEntry {
 	content?: string;
 }
 
+export interface WifiObservedState {
+	enabled: boolean;
+	connected: boolean;
+	ssid: string | null;
+	known_networks: string[];
+	visible_networks: Array<{ ssid: string; signal_strength: number; known: boolean }>;
+	internet_available: boolean;
+}
+
+export interface AgentTaskResult {
+	command: string;
+	goal: { type: 'wifi_enabled' | 'wifi_disabled' | 'connected' | 'disconnected'; ssid: string | null };
+	route: 'deterministic';
+	plan: Array<{ action: string; args: Record<string, unknown> }>;
+	executions: Array<{
+		action: string;
+		args: Record<string, unknown>;
+		status: 'succeeded' | 'failed';
+		message: string;
+		observed_state: WifiObservedState;
+	}>;
+	status: 'succeeded' | 'failed';
+	final_state: WifiObservedState;
+	error: string | null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(`${API_BASE}${path}`, {
 		...init,
@@ -24,7 +50,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	});
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({ detail: response.statusText }));
-		throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+		const detail = body.detail;
+		throw new Error(
+			typeof detail === 'string'
+				? detail
+				: typeof detail?.message === 'string'
+					? detail.message
+					: JSON.stringify(detail)
+		);
 	}
 	return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 }
@@ -85,6 +118,9 @@ export const osApi = {
 	},
 	sendCommand(command: OSCommand): Promise<unknown> {
 		return request('/control', { method: 'POST', body: JSON.stringify(command) });
+	},
+	runAgentTask(command: string): Promise<AgentTaskResult> {
+		return request('/agent/tasks', { method: 'POST', body: JSON.stringify({ command }) });
 	}
 };
 

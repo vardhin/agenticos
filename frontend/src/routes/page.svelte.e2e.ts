@@ -6,6 +6,24 @@ test.beforeEach(async ({ request }) => {
 	await request.put('/backend-api/state', { data: { value: {} } });
 });
 
+test('launcher submits natural-language intents to the backend', async ({ page, request }) => {
+	await request.post('/backend-api/agent/tasks', { data: { command: 'wifi off' } });
+	await page.goto('/');
+
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher.getByRole('textbox', { name: 'Search applications' }).fill('on wifi');
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	await expect(launcher.getByRole('status')).toContainText('Wi-Fi enabled');
+	await expect(launcher.getByRole('status')).toContainText('deterministic · 1 action');
+	const state = await request.get('/backend-api/wifi/state');
+	expect((await state.json()).enabled).toBe(true);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {

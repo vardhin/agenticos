@@ -1615,6 +1615,59 @@ textarea:focus-visible {
 	color: #f1f4f2;
 	font-size: 17px;
 }
+.intent-result {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: -5px 15px 12px;
+	padding: 10px 12px;
+	border: 1px solid #406148;
+	border-radius: 8px;
+	background: #29382d;
+	color: #9ce3a8;
+}
+.intent-result.failed {
+	border-color: #714747;
+	background: #3a2929;
+	color: #f09a9a;
+}
+.intent-result > span {
+	display: grid;
+	width: 22px;
+	height: 22px;
+	flex: 0 0 22px;
+	border-radius: 50%;
+	background: currentcolor;
+	color: #223027;
+	font-size: 13px;
+	font-weight: 800;
+	place-items: center;
+}
+.intent-result.failed > span {
+	color: #f09a9a;
+}
+.intent-result div {
+	display: grid;
+	gap: 2px;
+}
+.intent-result strong {
+	font-size: 12px;
+}
+.intent-result small {
+	color: #a9b5ac;
+	font-size: 9px;
+}
+.intent-spinner {
+	border: 2px solid #ffffff35;
+	border-top-color: #9ce3a8;
+	background: transparent !important;
+	animation: intent-spin 0.7s linear infinite;
+}
+@keyframes intent-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
 .command-centre kbd,
 .overview kbd {
 	padding: 2px 6px;
