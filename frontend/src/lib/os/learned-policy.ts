@@ -31,7 +31,17 @@ const organizeNoteActionSpace = [
 	'menu.editor.open'
 ] as const;
 type OrganizeNoteAction = (typeof organizeNoteActionSpace)[number];
-type LearnedAction = TaskAction | FindAppendAction | OrganizeNoteAction;
+const researchHandoffActionSpace = [
+	'browser.focus',
+	'browser.copy_url',
+	'editor.new_document',
+	'editor.paste_content',
+	'editor.save_as',
+	'filesystem.search',
+	'filesystem.reveal'
+] as const;
+type ResearchHandoffAction = (typeof researchHandoffActionSpace)[number];
+type LearnedAction = TaskAction | FindAppendAction | OrganizeNoteAction | ResearchHandoffAction;
 type TaskMilestone =
 	| 'clipboard_captured'
 	| 'empty_document_created'
@@ -55,6 +65,11 @@ export interface OrganizeNoteIntent {
 	filename: string;
 }
 
+export interface ResearchHandoffIntent {
+	type: 'research_handoff';
+	filename: string;
+}
+
 export interface CompiledTask {
 	goal: ClipboardFileIntent;
 	milestones: TaskMilestone[];
@@ -70,7 +85,7 @@ interface TrainingState {
 
 export interface LearnedTaskResult {
 	command: string;
-	goal: ClipboardFileIntent | FindAppendIntent | OrganizeNoteIntent;
+	goal: ClipboardFileIntent | FindAppendIntent | OrganizeNoteIntent | ResearchHandoffIntent;
 	route: 'q_learning';
 	training: { episodes: number; states: number; actions: number };
 	plan: Array<{ action: LearnedAction }>;
@@ -102,12 +117,23 @@ interface OrganizeNoteState {
 	savedInFolder: boolean;
 }
 
+interface ResearchHandoffState {
+	progress: number;
+	browserFocused: boolean;
+	addressCopied: boolean;
+	documentCreated: boolean;
+	addressPasted: boolean;
+	documentSaved: boolean;
+	fileFound: boolean;
+	fileRevealed: boolean;
+}
+
 export interface TaskRuntime {
 	dispatch(
 		command: OSCommand,
 		source?: 'human' | 'remote' | 'system'
 	): Promise<{ result: 'ok' | 'error'; detail: string }>;
-	snapshot(): { clipboard: string[]; editorText: string };
+	snapshot(): { clipboard: string[]; editorText: string; filesPath: string };
 }
 
 export function compileClipboardFileIntent(command: string): CompiledTask | null {
@@ -600,6 +626,174 @@ export async function runOrganizeNoteTask(
 			return buildOrganizeNoteResult(command, goal, policy, executions, 'failed', event.detail);
 	}
 	return buildOrganizeNoteResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+export function compileResearchHandoffIntent(command: string): ResearchHandoffIntent | null {
+	const normalized = command.trim().replace(/\s+/g, ' ');
+	if (
+		!/\bbrowser\b/i.test(normalized) ||
+		!/\b(?:address|url)\b/i.test(normalized) ||
+		!/\b(?:copy|capture)\b/i.test(normalized) ||
+		!/\b(?:note|document|file)\b/i.test(normalized) ||
+		!/\bpaste\b/i.test(normalized) ||
+		!/\bsave\b/i.test(normalized) ||
+		!/\breveal\b/i.test(normalized)
+	)
+		return null;
+	const filename = normalized.match(
+		/\bsave(?:\s+it)?\s+(?:as|with\s+(?:the\s+)?name)\s+["']?([\w.-]+)["']?/i
+	)?.[1];
+	return filename ? { type: 'research_handoff', filename: filename.trim() } : null;
+}
+
+function applyResearchHandoffAction(
+	state: ResearchHandoffState,
+	action: ResearchHandoffAction
+): ResearchHandoffState {
+	const next = { ...state };
+	if (action === 'browser.focus') next.browserFocused = true;
+	if (action === 'browser.copy_url' && state.browserFocused) next.addressCopied = true;
+	if (action === 'editor.new_document' && state.addressCopied) next.documentCreated = true;
+	if (action === 'editor.paste_content' && state.documentCreated) next.addressPasted = true;
+	if (action === 'editor.save_as' && state.addressPasted) next.documentSaved = true;
+	if (action === 'filesystem.search' && state.documentSaved) next.fileFound = true;
+	if (action === 'filesystem.reveal' && state.fileFound) next.fileRevealed = true;
+	return next;
+}
+
+function researchHandoffMilestoneSatisfied(progress: number, state: ResearchHandoffState): boolean {
+	if (progress === 0) return state.browserFocused;
+	if (progress === 1) return state.addressCopied;
+	if (progress === 2) return state.documentCreated;
+	if (progress === 3) return state.addressPasted;
+	if (progress === 4) return state.documentSaved;
+	if (progress === 5) return state.fileFound;
+	return state.fileRevealed;
+}
+
+function researchHandoffTransition(
+	state: ResearchHandoffState,
+	action: ResearchHandoffAction
+): { state: ResearchHandoffState; reward: number } {
+	const next = applyResearchHandoffAction(state, action);
+	if (!researchHandoffMilestoneSatisfied(state.progress, next)) return { state: next, reward: -2 };
+	next.progress += 1;
+	return { state: next, reward: next.progress === 7 ? 20 : 3 };
+}
+
+function trainResearchHandoffPolicy(episodes = 2800): {
+	actions: ResearchHandoffAction[];
+	statesVisited: number;
+} {
+	const qTable = new Map<string, number[]>();
+	const random = seededRandom();
+	const initialState = (): ResearchHandoffState => ({
+		progress: 0,
+		browserFocused: false,
+		addressCopied: false,
+		documentCreated: false,
+		addressPasted: false,
+		documentSaved: false,
+		fileFound: false,
+		fileRevealed: false
+	});
+	const valuesFor = (state: ResearchHandoffState) => {
+		const key = [
+			state.progress,
+			Number(state.browserFocused),
+			Number(state.addressCopied),
+			Number(state.documentCreated),
+			Number(state.addressPasted),
+			Number(state.documentSaved),
+			Number(state.fileFound),
+			Number(state.fileRevealed)
+		].join(':');
+		let values = qTable.get(key);
+		if (!values) {
+			values = researchHandoffActionSpace.map(() => 0);
+			qTable.set(key, values);
+		}
+		return values;
+	};
+	for (let episode = 0; episode < episodes; episode += 1) {
+		let state = initialState();
+		const epsilon = Math.max(0.05, 0.9 * (1 - episode / episodes));
+		for (let step = 0; step < 48 && state.progress !== 7; step += 1) {
+			const values = valuesFor(state);
+			const actionIndex =
+				random() < epsilon
+					? Math.floor(random() * researchHandoffActionSpace.length)
+					: bestAction(values);
+			const outcome = researchHandoffTransition(state, researchHandoffActionSpace[actionIndex]);
+			const future = outcome.state.progress === 7 ? 0 : Math.max(...valuesFor(outcome.state));
+			values[actionIndex] += 0.25 * (outcome.reward - 0.05 + 0.9 * future - values[actionIndex]);
+			state = outcome.state;
+		}
+	}
+	const actions: ResearchHandoffAction[] = [];
+	let state = initialState();
+	while (state.progress !== 7) {
+		const action = researchHandoffActionSpace[bestAction(valuesFor(state))];
+		const outcome = researchHandoffTransition(state, action);
+		if (outcome.state.progress === state.progress)
+			throw new Error('Learned policy did not converge');
+		actions.push(action);
+		state = outcome.state;
+	}
+	return { actions, statesVisited: qTable.size };
+}
+
+export async function runResearchHandoffTask(
+	runtime: TaskRuntime,
+	command: string
+): Promise<LearnedTaskResult | null> {
+	const goal = compileResearchHandoffIntent(command);
+	if (!goal) return null;
+	const policy = trainResearchHandoffPolicy();
+	const executions: LearnedTaskResult['executions'] = [];
+	for (const action of policy.actions) {
+		const input =
+			action === 'editor.paste_content'
+				? runtime.snapshot().clipboard[0]
+				: action === 'editor.save_as'
+					? { name: goal.filename, parent: 'Documents' }
+					: action === 'filesystem.search'
+						? goal.filename
+						: undefined;
+		const event = await runtime.dispatch({ node: action, input }, 'system');
+		executions.push({
+			action,
+			status: event.result === 'ok' ? 'succeeded' : 'failed',
+			message: event.detail
+		});
+		if (event.result === 'error')
+			return buildResearchHandoffResult(command, goal, policy, executions, 'failed', event.detail);
+	}
+	return buildResearchHandoffResult(command, goal, policy, executions, 'succeeded', null);
+}
+
+function buildResearchHandoffResult(
+	command: string,
+	goal: ResearchHandoffIntent,
+	policy: { actions: ResearchHandoffAction[]; statesVisited: number },
+	executions: LearnedTaskResult['executions'],
+	status: LearnedTaskResult['status'],
+	error: string | null
+): LearnedTaskResult {
+	return {
+		command,
+		goal,
+		route: 'q_learning',
+		training: {
+			episodes: 2800,
+			states: policy.statesVisited,
+			actions: researchHandoffActionSpace.length
+		},
+		plan: policy.actions.map((action) => ({ action })),
+		executions,
+		status,
+		error
+	};
 }
 
 function buildOrganizeNoteResult(

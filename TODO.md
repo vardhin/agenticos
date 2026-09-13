@@ -93,7 +93,7 @@ Each leaf below should become a registered action with the uniform contract.
 - [ ] `filesystem`
   - [x] `filesystem.open(path)`
   - [x] `filesystem.open_file(file_id)`
-  - [ ] `filesystem.reveal(node_id)`
+  - [x] `filesystem.reveal(node_id)`
   - [x] `filesystem.list(path)`
   - [x] `filesystem.search(query)`
   - [x] `filesystem.read(file_id)`
@@ -150,7 +150,7 @@ Each leaf below should become a registered action with the uniform contract.
   - [ ] `browser.bookmark(url)`
   - [ ] `browser.download(resource)`
   - [ ] `browser.find_on_page(query)`
-  - [ ] `browser.copy_url`
+  - [x] `browser.copy_url`
 - [ ] `search`
   - [ ] `search.query(text, domains)`
   - [ ] `search.filter(type, date, owner)`
@@ -328,7 +328,7 @@ Each benchmark must be compiled to semantic goals, trained in simulation, execut
 - [x] 6 actions — Organize a note
   - Prompt: `Create a Projects folder in Documents, make a note from the clipboard, save it as brief, and move it into Projects.`
   - Candidate trajectory: `filesystem.open → filesystem.create_folder → clipboard.read → editor.new → editor.paste → editor.save_as`
-- [ ] 7 actions — Research handoff
+- [x] 7 actions — Research handoff
   - Prompt: `Copy the browser address, create a source note, paste the address, save it as source, then reveal it in Files.`
   - Candidate trajectory: `browser.focus → browser.copy_url → editor.new → editor.paste → editor.save_as → filesystem.search → filesystem.reveal`
 - [ ] 8 actions — Workspace setup

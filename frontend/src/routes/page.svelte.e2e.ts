@@ -210,6 +210,65 @@ test('learned policy organizes a clipboard note into a new folder', async ({ pag
 		]);
 });
 
+test('learned policy hands the current browser address off to a revealed source note', async ({
+	page,
+	request
+}) => {
+	const basename = `source-${Date.now()}`;
+	await page.goto('/');
+	await page
+		.getByRole('navigation', { name: 'System panel' })
+		.getByRole('button', { name: 'Applications' })
+		.click();
+	const launcher = page.getByRole('region', { name: 'Application menu' });
+	await launcher
+		.getByRole('textbox', { name: 'Search applications' })
+		.fill(
+			`Copy the browser address, create a source note, paste the address, save it as ${basename}, then reveal it in Files.`
+		);
+	await launcher.getByRole('textbox', { name: 'Search applications' }).press('Enter');
+
+	const filesWindow = page.getByRole('region', { name: 'Files window' });
+	await expect(filesWindow).toBeVisible();
+	await expect(filesWindow.locator('.folder-grid button.selected')).toContainText(
+		`${basename}.txt`
+	);
+	const search = await request.get('/backend-api/files/search', {
+		params: { q: `${basename}.txt` }
+	});
+	const file = (await search.json()).items[0];
+	const saved = await request.get(`/backend-api/files/${file.id}`, {
+		params: { include_content: true }
+	});
+	expect((await saved.json()).content).toBe('https://example.com');
+	await expect
+		.poll(async () => {
+			const response = await request.get('/backend-api/events');
+			const actionIds = [
+				'browser.focus',
+				'browser.copy_url',
+				'editor.new_document',
+				'editor.paste_content',
+				'editor.save_as',
+				'filesystem.search',
+				'filesystem.reveal'
+			];
+			return (await response.json()).items
+				.map((event: { node: string }) => event.node)
+				.filter((node: string) => actionIds.includes(node))
+				.slice(0, 7);
+		})
+		.toEqual([
+			'filesystem.reveal',
+			'filesystem.search',
+			'editor.save_as',
+			'editor.paste_content',
+			'editor.new_document',
+			'browser.copy_url',
+			'browser.focus'
+		]);
+});
+
 test('desktop shell renders and routes human and remote commands', async ({ page, request }) => {
 	const consoleErrors: string[] = [];
 	page.on('console', (message) => {

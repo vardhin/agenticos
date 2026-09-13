@@ -5,6 +5,7 @@
 		runClipboardFileTask,
 		runFindAppendTask,
 		runOrganizeNoteTask,
+		runResearchHandoffTask,
 		type LearnedTaskResult
 	} from '$lib/os/learned-policy';
 	import { createOSRuntime } from '$lib/os/runtime';
@@ -84,6 +85,14 @@
 		if (!taskSearchResult) throw new Error('No file has been captured by search');
 		await openFile(taskSearchResult);
 		return `Opened ${taskSearchResult.name}`;
+	});
+	runtime.registerHandler('filesystem.reveal', async () => {
+		if (!taskSearchResult) throw new Error('No file has been captured by search');
+		const parent = taskSearchResult.path.slice(0, -(taskSearchResult.name.length + 1));
+		await runtime.dispatch('menu.files.open', 'system');
+		await openPath(parent);
+		selectedFileId = taskSearchResult.id;
+		return `Revealed ${taskSearchResult.name} in ${parent}`;
 	});
 	runtime.registerHandler('filesystem.open', async (input) => {
 		const path = String(input ?? '').trim();
@@ -168,6 +177,20 @@
 	runtime.registerHandler('window.browser.navigate', (input) => {
 		navigateBrowser(String(input ?? ''));
 		return `Navigated to ${browserUrl}`;
+	});
+	runtime.registerHandler('browser.focus', async () => {
+		await runtime.dispatch('menu.browser.open', 'system');
+		return 'Browser focused';
+	});
+	runtime.registerHandler('browser.copy_url', () => {
+		runtime.state.update((current) => ({
+			...current,
+			clipboard: [browserUrl, ...current.clipboard.filter((item) => item !== browserUrl)].slice(
+				0,
+				8
+			)
+		}));
+		return `Copied ${browserUrl}`;
 	});
 
 	const desktopIcons = [
@@ -355,6 +378,13 @@
 		intentResult = null;
 		intentError = null;
 		try {
+			const researchHandoffResult = await runResearchHandoffTask(runtime, command);
+			if (researchHandoffResult) {
+				intentResult = researchHandoffResult;
+				if (researchHandoffResult.status === 'failed')
+					intentError = researchHandoffResult.error ?? 'The learned policy did not reach its goal';
+				return;
+			}
 			const organizeNoteResult = await runOrganizeNoteTask(runtime, command);
 			if (organizeNoteResult) {
 				intentResult = organizeNoteResult;

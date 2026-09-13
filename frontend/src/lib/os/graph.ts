@@ -351,6 +351,20 @@ export const controlGraph: ControlNode[] = [
 		parentId: 'window.browser',
 		description: 'Navigate to a URL or search query'
 	},
+	{
+		id: 'browser.focus',
+		label: 'Focus Browser',
+		kind: 'action',
+		parentId: 'window.browser',
+		description: 'Show and focus the browser window'
+	},
+	{
+		id: 'browser.copy_url',
+		label: 'Copy Browser Address',
+		kind: 'action',
+		parentId: 'window.browser',
+		description: 'Copy the current browser address to the clipboard'
+	},
 	...['minimize', 'maximize', 'close'].map((action) => ({
 		id: `window.browser.${action}`,
 		label: `${action[0].toUpperCase()}${action.slice(1)} Browser`,
@@ -462,6 +476,13 @@ export const controlGraph: ControlNode[] = [
 		kind: 'input',
 		parentId: 'desktop.filesystem',
 		description: 'Open a file found by its stable identifier or name'
+	},
+	{
+		id: 'filesystem.reveal',
+		label: 'Reveal file',
+		kind: 'action',
+		parentId: 'desktop.filesystem',
+		description: 'Reveal the captured file in its parent folder'
 	},
 	{
 		id: 'filesystem.open',
